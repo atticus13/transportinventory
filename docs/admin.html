@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Asset Tracker · Admin</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <style>
+    .tabpane > .card:first-child { margin-top: 0; }
+    .toolbar { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+    .toolbar input[type="search"], .toolbar input[type="text"] { max-width: 280px; }
+    .toolbar select { width: auto; }
+    .toolbar label.chk { display: flex; align-items: center; gap: 6px; font-size: 14px; color: var(--muted); cursor: pointer; }
+    .presets { display: flex; gap: 6px; flex-wrap: wrap; }
+    .presets .btn { padding: 5px 10px; font-size: 12.5px; }
+    .presets .btn.on { border-color: var(--orange); color: var(--orange-hi); }
+    .rpt-title { font-size: 13px; color: var(--muted); margin: 0 0 14px; }
+    h3.sec { margin: 22px 0 10px; }
+    td .sub { color: var(--muted); font-size: 12.5px; }
+    .detail-row td { background: var(--bg-2); }
+
+    /* notification bell + banner */
+    .bell { position: relative; background: transparent; border: 1px solid var(--line); border-radius: 10px; width: 40px; height: 38px; display: grid; place-items: center; cursor: pointer; color: var(--text); }
+    .bell:hover { border-color: var(--orange); }
+    .bell svg { width: 20px; height: 20px; }
+    .bell.has { border-color: var(--orange); color: var(--orange-hi); }
+    .badge { position: absolute; top: -7px; right: -7px; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 999px; background: var(--orange); color: #fff; font-size: 12px; font-weight: 750; display: grid; place-items: center; box-shadow: 0 0 0 2px var(--bg); }
+    .tab .badge { position: static; display: inline-grid; margin-left: 6px; vertical-align: 1px; box-shadow: none; height: 18px; min-width: 18px; font-size: 11px; }
+    .alertbar { display: flex; align-items: center; gap: 12px; padding: 10px 24px; background: linear-gradient(90deg, rgba(250, 70, 22, 0.22), rgba(250, 70, 22, 0.08)); border-bottom: 1px solid rgba(250, 70, 22, 0.45); font-weight: 600; }
+    .alertbar .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--orange); box-shadow: 0 0 0 4px rgba(250, 70, 22, 0.25); }
+    @media (max-width: 640px) { .alertbar { padding: 10px 14px; } }
+    .progress { height: 8px; border-radius: 99px; background: var(--line-soft); overflow: hidden; margin: 12px 0; }
+    .progress i { display: block; height: 100%; width: 0; background: var(--ok); transition: width 0.2s; }
+    .cols3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+    @media (max-width: 900px) { .cols3 { grid-template-columns: 1fr; } }
+    .cols3 h4 { margin: 0 0 6px; font-size: 14px; }
+    .idlist { display: flex; flex-wrap: wrap; gap: 6px; }
+    .idlist .chip { cursor: default; }
+    .radio { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border: 1px solid var(--line-soft); border-radius: 10px; margin-bottom: 8px; cursor: pointer; }
+    .radio input { margin-top: 3px; width: auto; }
+    .radio small { color: var(--muted); display: block; }
+  </style>
+</head>
+<body>
+
+  <div id="setup" class="login-wrap hidden">
+    <div class="card login">
+      <div class="notice"><b>Firebase isn't configured yet.</b><br />Open <span class="mono">docs/js/firebase-config.js</span> and paste in your Firebase web-app config. See README.md.</div>
+    </div>
+  </div>
+
+  <div id="login" class="login-wrap hidden">
+    <div class="card login">
+      <div class="brand"><div class="mark">📱</div><div>Asset Tracker<small>Administrator sign-in</small></div></div>
+      <form id="loginForm">
+        <label class="f">Email<input id="lEmail" type="email" autocomplete="username" required /></label>
+        <label class="f">Password<input id="lPass" type="password" autocomplete="current-password" required /></label>
+        <div id="lErr" class="err-text"></div>
+        <button class="btn primary" type="submit" style="justify-content:center">Sign in</button>
+      </form>
+    </div>
+  </div>
+
+  <div id="app" class="hidden">
+    <header class="topbar">
+      <div class="brand"><div class="mark">📱</div><div>Asset Tracker<small id="orgName"></small></div></div>
+      <div class="spacer"></div>
+      <span class="muted" id="whoami"></span>
+      <button class="bell" id="bell" title="Alerts: missed returns and reported problems" aria-label="Alerts">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9a6 6 0 1 1 12 0c0 6 2.5 7.5 2.5 7.5h-17S6 15 6 9z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg>
+        <span class="badge hidden" id="bellCount">0</span>
+      </button>
+      <a class="btn ghost sm" href="index.html">Scan station</a>
+      <button class="btn ghost sm" id="signOut">Sign out</button>
+    </header>
+
+    <div id="alertBar" class="alertbar hidden" role="alert">
+      <span class="dot"></span><span id="alertBarText"></span>
+      <button class="btn sm primary" id="alertBarGo">Review</button>
+    </div>
+
+    <nav class="tabs" id="tabs">
+      <button class="tab active" data-tab="dashboard">Dashboard</button>
+      <button class="tab" data-tab="alerts">Alerts <span class="badge hidden" id="alertTabCount">0</span></button>
+      <button class="tab" data-tab="assets">Assets</button>
+      <button class="tab" data-tab="staff">Staff</button>
+      <button class="tab" data-tab="inventory">Inventory</button>
+      <button class="tab" data-tab="sweep">Shift sweep</button>
+      <button class="tab" data-tab="reports">Reports</button>
+      <button class="tab" data-tab="admins">Admins</button>
+      <button class="tab" data-tab="changelog">Changelog</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+
+    <main class="page">
+
+      <!-- Dashboard -->
+      <section id="tab-dashboard" class="tabpane">
+        <div class="stats" id="dashStats"></div>
+        <div class="card">
+          <div class="card-head"><h2>Checked out right now</h2><div class="spacer"></div><button class="btn sm" id="goSweep">Run shift sweep →</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Asset</th><th>Type</th><th>Model</th><th>With</th><th>Since</th><th>Duration</th></tr></thead>
+            <tbody id="dashOut"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Recent activity</h2></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Time</th><th>Action</th><th>Asset</th><th>Employee</th><th>Held</th></tr></thead>
+            <tbody id="dashRecent"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- Alerts -->
+      <section id="tab-alerts" class="tabpane hidden">
+        <div class="card">
+          <div class="card-head">
+            <h2>Not returned</h2><span class="muted">Checked out, never checked in, then taken by the next person. The next person was <b>not</b> blocked. It's yours to follow up.</span>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Detected</th><th>Asset</th><th>Not returned by</th><th>Out for</th><th>Taken by</th><th></th></tr></thead>
+            <tbody id="alertsOpen"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Reported problems</h2><span class="muted">Raised at the scan station (cracked screen, won't charge…). Resolve once handled.</span>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Reported</th><th>Asset</th><th>Problem</th><th>Reported by</th><th></th></tr></thead>
+            <tbody id="issuesOpen"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Still out too long</h2><span class="muted" id="overdueNote"></span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Asset</th><th>With</th><th>Since</th><th>Out for</th><th></th></tr></thead>
+            <tbody id="alertsOverdue"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Resolved</h2><div class="spacer"></div><button class="btn" id="loadResolved">Show resolved alerts &amp; problems</button></div>
+          <div id="alertsResolved" class="muted">Resolved alerts stay on record. Load them to review history.</div>
+        </div>
+      </section>
+
+      <!-- Assets -->
+      <section id="tab-assets" class="tabpane hidden">
+        <div class="card">
+          <div class="card-head">
+            <h2>Assets</h2><span class="muted" id="assetCount"></span>
+            <div class="spacer"></div>
+            <button class="btn primary" id="addAsset">+ Add asset</button>
+            <button class="btn" id="manageTypes">Asset types</button>
+            <button class="btn" id="importAssets">Import CSV</button>
+            <button class="btn" id="exportAssets">Export CSV</button>
+          </div>
+          <div class="toolbar">
+            <input type="search" id="assetSearch" placeholder="Search ID, model, IMEI, serial, number, holder…" />
+            <select id="assetType"></select>
+            <select id="assetStatus"><option value="all">All statuses</option><option value="out">Checked out</option><option value="in">Available</option></select>
+            <label class="chk"><input type="checkbox" id="assetRemoved" /> Show out-of-service</label>
+            <div class="spacer"></div>
+            <button class="btn" id="selectShown">Select all shown</button>
+            <button class="btn" id="clearSel" disabled>Clear</button>
+            <button class="btn blue" id="printSelected" disabled>Print labels…</button>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr>
+              <th style="width:32px"><input type="checkbox" id="assetAll" title="Select all shown" /></th>
+              <th>Asset ID</th><th>Type</th><th>Model</th><th>IMEI</th><th>Serial #</th><th>Phone #</th><th>Status</th><th></th>
+            </tr></thead>
+            <tbody id="assetsBody"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- Staff -->
+      <section id="tab-staff" class="tabpane hidden">
+        <div class="card">
+          <div class="card-head">
+            <h2>Staff</h2><span class="muted" id="staffCount"></span>
+            <div class="spacer"></div>
+            <button class="btn primary" id="addStaff">+ Add staff</button>
+            <button class="btn" id="importStaff">Import CSV</button>
+            <button class="btn" id="exportStaff">Export CSV</button>
+          </div>
+          <div class="toolbar">
+            <input type="search" id="staffSearch" placeholder="Search name or employee ID…" />
+            <label class="chk"><input type="checkbox" id="staffRemoved" /> Show removed</label>
+            <div class="spacer"></div>
+            <button class="btn" id="pinRequireSel" disabled title="For PIN mode “Selected people”">Require PIN for selected</button>
+            <button class="btn" id="pinClearSel" disabled>Don't require PIN</button>
+            <button class="btn blue" id="printStaffSelected" disabled>Print barcodes…</button>
+          </div>
+          <div class="table-wrap"><table>
+            <thead><tr><th style="width:32px"><input type="checkbox" id="staffAll" title="Select all shown" /></th><th>Employee ID</th><th>Name</th><th>Status</th><th>PIN</th><th>Has device</th><th></th></tr></thead>
+            <tbody id="staffBody"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- Inventory count -->
+      <section id="tab-inventory" class="tabpane hidden">
+        <div class="card" id="invSetup">
+          <div class="card-head"><h2>Inventory count</h2><span class="muted">Scan every device that's physically in the drawer. Anything that should be there but wasn't scanned is flagged. Devices checked out to staff are not expected.</span></div>
+          <div class="toolbar">
+            <label class="f" style="flex-direction:row;align-items:center;gap:8px">Count<select id="invScope"></select></label>
+            <button class="btn primary" id="invStart">Start count</button>
+          </div>
+        </div>
+        <div class="card hidden" id="invRun">
+          <div class="card-head"><h2 id="invTitle">Counting…</h2><div class="spacer"></div>
+            <button class="btn" id="invCancel">Cancel</button><button class="btn primary" id="invFinish">Finish &amp; save count</button></div>
+          <input id="invScan" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Scan a device (or type its ID and press Enter)" style="font-family:var(--mono);font-size:20px;padding:14px 16px" />
+          <div id="invMsg" class="muted" style="margin-top:8px;min-height:22px"></div>
+          <div class="progress"><i id="invBar"></i></div>
+          <div id="invLists"></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Past counts</h2></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>When</th><th>Counted by</th><th>Scope</th><th>Expected</th><th>Found</th><th>Missing</th><th>Other</th><th></th></tr></thead>
+            <tbody id="invHistory"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- Shift sweep -->
+      <section id="tab-sweep" class="tabpane hidden">
+        <div class="card">
+          <div class="card-head"><h2>End-of-shift sweep</h2><span class="muted">What's still out at shift change. Chase anything that should have been returned, then record the sweep.</span></div>
+          <div class="toolbar no-print">
+            <label class="f" style="flex-direction:row;align-items:center;gap:8px">Shift change<select id="sweepAt"></select></label>
+            <div class="spacer"></div>
+            <button class="btn" id="sweepPrint">Print list</button>
+            <button class="btn primary" id="sweepRecord">Record sweep</button>
+          </div>
+          <p id="sweepSummary" class="muted" style="margin-top:0"></p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Asset</th><th>Type</th><th>With</th><th>Out since</th><th>Out for</th><th class="no-print"></th></tr></thead>
+            <tbody id="sweepBody"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- Reports -->
+      <section id="tab-reports" class="tabpane hidden">
+        <div class="card no-print">
+          <div class="card-head"><h2>Reports</h2></div>
+          <div class="form-grid" style="margin-bottom:12px">
+            <label class="f">Report
+              <select id="rType">
+                <option value="all">All staff &amp; assets</option>
+                <option value="staff">Individual staff member</option>
+                <option value="asset">Individual asset</option>
+              </select>
+            </label>
+            <label class="f hidden" id="rSubjectWrap"><span id="rSubjectLabel">Staff member</span>
+              <input id="rSubject" list="rSubjectList" autocomplete="off" placeholder="Start typing an ID or name…" />
+              <datalist id="rSubjectList"></datalist>
+            </label>
+            <label class="f" id="rCategoryWrap">Asset type<select id="rCategory"></select></label>
+            <label class="f">From<input type="date" id="rFrom" /></label>
+            <label class="f">To<input type="date" id="rTo" /></label>
+          </div>
+          <div class="row">
+            <div class="presets" id="presets">
+              <button class="btn ghost" data-days="0">Today</button>
+              <button class="btn ghost" data-days="1">Yesterday</button>
+              <button class="btn ghost" data-days="7">Last 7 days</button>
+              <button class="btn ghost" data-days="30">Last 30 days</button>
+              <button class="btn ghost" data-days="90">Last 90 days</button>
+              <button class="btn ghost" data-days="month">This month</button>
+            </div>
+            <div class="spacer"></div>
+            <button class="btn primary" id="rRun">Run report</button>
+          </div>
+        </div>
+        <div id="rOut"></div>
+      </section>
+
+      <!-- Admins -->
+      <section id="tab-admins" class="tabpane hidden">
+        <div class="card">
+          <div class="card-head"><h2>Administrators</h2><div class="spacer"></div><button class="btn primary" id="addAdmin">+ Add admin / station login</button></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Added</th><th></th></tr></thead>
+            <tbody id="adminsBody"></tbody>
+          </table></div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h2>Station logins</h2><span class="muted">Scan-only accounts for the check-out computer</span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Label</th><th>Email</th><th>Status</th><th>Added</th><th></th></tr></thead>
+            <tbody id="stationsBody"></tbody>
+          </table></div>
+        </div>
+      </section>
+
+      <!-- Changelog -->
+      <section id="tab-changelog" class="tabpane hidden">
+        <div class="card">
+          <div class="card-head"><h2>Changelog</h2><span class="muted">Every admin action, permanently recorded</span></div>
+          <div class="form-grid" style="margin-bottom:12px">
+            <label class="f">Admin<select id="cAdmin"></select></label>
+            <label class="f">From<input type="date" id="cFrom" /></label>
+            <label class="f">To<input type="date" id="cTo" /></label>
+            <label class="f">Filter text<input type="search" id="cText" placeholder="e.g. PH-014, remove, import…" /></label>
+          </div>
+          <div class="row"><div class="spacer"></div><button class="btn" id="cExport">Export CSV</button><button class="btn primary" id="cRun">Show changes</button></div>
+        </div>
+        <div id="cOut"></div>
+      </section>
+
+      <!-- Settings -->
+      <section id="tab-settings" class="tabpane hidden">
+        <form class="card" id="settingsForm">
+          <div class="card-head"><h2>Settings</h2><span class="muted" id="settingsNote"></span></div>
+          <h3 class="sec" style="margin-top:0">PIN at the scan station</h3>
+          <label class="radio"><input type="radio" name="pinMode" value="off" /><span><b>Off</b><small>Badge, then device. No PIN.</small></span></label>
+          <label class="radio"><input type="radio" name="pinMode" value="selected" /><span><b>Selected people</b><small>Only people you mark on the Staff tab ("Require PIN for selected"), for example supervisors or anyone with a history of shared badges.</small></span></label>
+          <label class="radio"><input type="radio" name="pinMode" value="all" /><span><b>Everyone</b><small>Every person is asked for a PIN after scanning their badge.</small></span></label>
+          <p class="muted" style="font-size:13.5px">People choose their own 4-6 digit PIN the first time it's asked. You never see it. If someone forgets, use <b>PIN…</b> on the Staff tab to reset it. This keeps coworkers from casually borrowing a badge. It is not strong security: the scrambled PIN is stored on the staff record. <span id="pinStats"></span></p>
+          <h3 class="sec">Shift changes</h3>
+          <label class="f" style="max-width:420px">Shift-change times (24-hour, separated by commas)<input id="shiftTimes" placeholder="07:00, 15:00, 23:00" /></label>
+          <p class="muted" style="font-size:13.5px">Used by the Shift sweep tab. Change them to match your real shifts.</p>
+          <div class="err-text" id="settingsErr"></div>
+          <div class="row"><div class="spacer"></div><button class="btn primary" type="submit">Save settings</button></div>
+        </form>
+      </section>
+
+    </main>
+  </div>
+
+  <dialog id="dlg"></dialog>
+  <script type="module" src="js/admin.js"></script>
+</body>
+</html>
