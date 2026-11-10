@@ -4,10 +4,10 @@
 //  2. Adjust SETTINGS to taste.
 // ─────────────────────────────────────────────────────────────
 export const firebaseConfig = {
-  apiKey: "YOUR_API_KEY",
-  authDomain: "YOUR_PROJECT.firebaseapp.com",
-  projectId: "YOUR_PROJECT",
-  appId: "YOUR_APP_ID",
+  apiKey: "AIzaSyC-d6AO5K0wPPkv6KUkYx-KzZaG7B8s2d8",
+  authDomain: "transportinventory-17902.firebaseapp.com",
+  projectId: "transportinventory-17902",
+  appId: "1:808563708285:web:7cdbcf13f844317616bc14",
 };
 
 export const SETTINGS = {
