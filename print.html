@@ -1,0 +1,119 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="robots" content="noindex" />
+  <title>Label designer</title>
+  <link rel="stylesheet" href="css/theme.css" />
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+  <style id="pageStyle"></style>
+  <style>
+    body { background: #1a2340; }
+    .controls { position: sticky; top: 0; z-index: 10; background: rgba(10, 16, 32, 0.94); backdrop-filter: blur(8px); border-bottom: 1px solid var(--line-soft); padding: 12px 20px; }
+    .controls .row { max-width: 1280px; margin: 0 auto; }
+    .designer { max-width: 1280px; margin: 0 auto; padding: 18px 20px 0; display: grid; grid-template-columns: 380px 1fr; gap: 18px; align-items: start; }
+    @media (max-width: 900px) { .designer { grid-template-columns: 1fr; } }
+    .panel { display: grid; gap: 14px; }
+    .panel h3 { margin: 0 0 8px; font-size: 14px; }
+    .panel select, .panel input[type=text], .panel input[type=number] { width: 100%; }
+    .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .lines { display: grid; gap: 8px; }
+    .line { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; padding: 8px; border: 1px solid var(--line-soft); border-radius: 10px; }
+    .line .tools { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+    .line .tools label { display: flex; gap: 5px; align-items: center; font-size: 13px; }
+    .tplrow { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .tplrow input { flex: 1; min-width: 120px; }
+    .preview { min-width: 0; }
+    .sheet { padding: 6px 0 24px; display: flex; flex-wrap: wrap; gap: 14px; justify-content: flex-start; align-items: flex-start; }
+    .label {
+      background: #fff; color: #000; width: var(--lw); height: var(--lh); flex: none;
+      padding: 0.04in 0.07in; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;
+      overflow: hidden; border-radius: 4px; box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4); font-family: var(--sans); text-align: center;
+    }
+    .label.cut { outline: 2px solid var(--err); }
+    .label svg { width: 100%; height: auto; display: block; flex: none; }
+    .label svg.bc-sm { max-height: calc(var(--lh) * 0.30); }
+    .label svg.bc-md { max-height: calc(var(--lh) * 0.42); }
+    .label svg.bc-lg { max-height: calc(var(--lh) * 0.58); }
+    .label .t { line-height: 1.12; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .label .t.sm { font-size: 7pt; } .label .t.md { font-size: 9pt; } .label .t.lg { font-size: 12pt; }
+    .label .t.b { font-weight: 700; }
+    .label .hf { font-size: 7.5pt; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .label .ft { font-size: 6.5pt; color: #333; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .msg { color: var(--muted); padding: 60px 20px; text-align: center; }
+    .warn-line { color: var(--orange-hi); font-size: 13px; }
+
+    @media print {
+      body { background: #fff; }
+      .controls, .msg, .panel, .no-print { display: none !important; }
+      .designer { display: block; padding: 0; max-width: none; }
+      .sheet { padding: 0; gap: 0; display: block; }
+      .label { box-shadow: none; border-radius: 0; outline: 0 !important; }
+      .roll .label { break-after: page; page-break-after: always; }
+      .grid { display: flex !important; flex-wrap: wrap; }
+      .grid .label { outline: 0.5pt dashed #bbb !important; break-inside: avoid; }
+    }
+  </style>
+</head>
+<body>
+  <div class="controls no-print">
+    <div class="row">
+      <a class="btn ghost sm" href="admin.html#assets">← Back to admin</a>
+      <strong id="title">Label designer</strong>
+      <div class="spacer"></div>
+      <span class="muted" id="count"></span>
+      <button class="btn primary" id="printBtn" disabled>Print</button>
+    </div>
+  </div>
+
+  <div id="gate" class="msg">Loading…</div>
+
+  <div id="designer" class="designer hidden">
+    <aside class="panel no-print">
+      <div class="card">
+        <h3>Template</h3>
+        <select id="tplSelect" aria-label="Template"></select>
+        <div class="tplrow" style="margin-top:8px">
+          <input type="text" id="tplName" placeholder="Name this template" maxlength="60" />
+          <button class="btn sm" id="tplSaveNew">Save as new</button>
+        </div>
+        <div class="tplrow" style="margin-top:8px">
+          <button class="btn sm hidden" id="tplUpdate">Update this template</button>
+          <button class="btn sm danger hidden" id="tplArchive">Archive</button>
+        </div>
+        <div class="err-text" id="tplErr" style="margin-top:6px"></div>
+      </div>
+
+      <div class="card">
+        <h3>Label</h3>
+        <label class="f">Label size<select id="size"></select></label>
+        <div class="two hidden" id="customSize" style="margin-top:8px">
+          <label class="f">Width (in)<input type="number" id="cW" step="0.05" min="0.75" max="8" /></label>
+          <label class="f">Height (in)<input type="number" id="cH" step="0.05" min="0.5" max="10" /></label>
+        </div>
+        <label class="row" style="gap:6px;font-size:14px;margin-top:10px"><input type="checkbox" id="sheet" /> Print on plain letter paper (cut apart)</label>
+        <div class="two" style="margin-top:10px">
+          <label class="f">Barcode size<select id="bcSize"><option value="sm">Small</option><option value="md">Medium</option><option value="lg">Large</option></select></label>
+          <label class="f" style="justify-content:end"><span class="row" style="gap:6px;font-size:14px"><input type="checkbox" id="showText" /> Show ID under barcode</span></label>
+        </div>
+        <label class="f" style="margin-top:10px">Header (above barcode)<input type="text" id="header" maxlength="60" placeholder="e.g. Patient Transport" /></label>
+        <label class="f" style="margin-top:10px">Footer (bottom of label)<input type="text" id="footer" maxlength="60" placeholder="e.g. Property of Patient Transport" /></label>
+      </div>
+
+      <div class="card">
+        <h3>Lines under the barcode</h3>
+        <div class="lines" id="lines"></div>
+        <div class="row" style="margin-top:10px"><button class="btn sm" id="addLine">＋ Add a line</button><span class="muted" style="font-size:13px" id="lineHint"></span></div>
+      </div>
+    </aside>
+
+    <section class="preview">
+      <div class="warn-line no-print" id="cutWarn"></div>
+      <div id="out" class="sheet"></div>
+    </section>
+  </div>
+
+  <script type="module" src="js/print.js"></script>
+</body>
+</html>

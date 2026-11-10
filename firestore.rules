@@ -1,0 +1,157 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Who is allowed in ───────────────────────────────────────────
+    // Being signed in is NOT enough. A login only works if it has an
+    // active document in /admins (full access) or /stations (scan only).
+    function signedIn() { return request.auth != null; }
+    function adminPath()   { return /databases/$(database)/documents/admins/$(request.auth.uid); }
+    function stationPath() { return /databases/$(database)/documents/stations/$(request.auth.uid); }
+    function isAdmin()   { return signedIn() && exists(adminPath())   && get(adminPath()).data.active == true; }
+    function isStation() { return signedIn() && exists(stationPath()) && get(stationPath()).data.active == true; }
+    function isOperator() { return isAdmin() || isStation(); }
+
+    // ── No footprint, no change ─────────────────────────────────────
+    // Every admin write must carry an `auditId` pointing at an auditLog
+    // entry created in the SAME batch, by the same admin, for the same record.
+    function auditAfter() {
+      return getAfter(/databases/$(database)/documents/auditLog/$(request.resource.data.auditId));
+    }
+    function audited(targetType, targetId) {
+      return request.resource.data.get('auditId', null) is string
+        && auditAfter().data.adminUid == request.auth.uid
+        && auditAfter().data.targetType == targetType
+        && auditAfter().data.targetId == targetId;
+    }
+
+    // A scan station may change who has a device (in, out, or taken over by the next
+    // person), but ONLY those fields, and only together with a log entry for that
+    // device in the same transaction.
+    function stationUpdate(id) {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      return isOperator()
+        && resource.data.active == true
+        && keys.hasOnly(['status', 'currentHolderId', 'currentHolderName', 'checkedOutAt', 'lastLogId'])
+        && keys.hasAny(['status', 'currentHolderId'])
+        && request.resource.data.status in ['in', 'out']
+        && request.resource.data.lastLogId is string
+        && getAfter(/databases/$(database)/documents/logs/$(request.resource.data.lastLogId)).data.assetId == id;
+    }
+
+    // First-use PIN: a station may set a person's PIN ONLY while they don't have one yet,
+    // and may touch nothing else on the record. Admins reset or change PINs (audited).
+    function stationPinSet() {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      return isOperator()
+        && resource.data.active == true
+        && keys.hasOnly(['pinHash', 'pinSalt', 'pinSetAt'])
+        && keys.hasAll(['pinHash', 'pinSalt', 'pinSetAt'])
+        && resource.data.get('pinHash', null) == null
+        && request.resource.data.pinHash is string && request.resource.data.pinHash.size() == 64
+        && request.resource.data.pinSalt is string && request.resource.data.pinSalt.size() >= 16 && request.resource.data.pinSalt.size() <= 64
+        && request.resource.data.pinSetAt == request.time;
+    }
+
+    match /staff/{id} {
+      allow read: if isOperator();
+      allow create: if isAdmin() && audited('staff', id);
+      allow update: if (isAdmin() && audited('staff', id)) || stationPinSet();
+      allow delete: if false;                       // staff are deactivated, never erased
+    }
+
+    match /assets/{id} {
+      allow read: if isOperator();
+      allow create: if isAdmin() && audited('asset', id);
+      allow update: if (isAdmin() && audited('asset', id)) || stationUpdate(id);
+      allow delete: if false;                       // assets are retired, never erased
+    }
+
+    // Immutable history of every check-out / check-in.
+    match /logs/{id} {
+      allow read: if isOperator();
+      allow create: if isOperator()
+        && request.resource.data.ts == request.time
+        && request.resource.data.type in ['in', 'out', 'missed']
+        && request.resource.data.assetId is string
+        && request.resource.data.employeeId is string;
+      allow update, delete: if false;
+    }
+
+    // Asset types (categories such as Phone, iPad). Archived, never deleted.
+    match /assetTypes/{id} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && audited('assetType', id);
+      allow delete: if false;
+    }
+
+    // Saved label designs.
+    match /labelTemplates/{id} {
+      allow read: if isAdmin();
+      allow create, update: if isAdmin() && audited('labelTemplate', id);
+      allow delete: if false;
+    }
+
+    // App-wide settings (PIN mode, shift-change times). Stations read them; admins change them (audited).
+    match /settings/{id} {
+      allow read: if isOperator();
+      allow create, update: if isAdmin() && audited('settings', id);
+      allow delete: if false;
+    }
+
+    // Problem reports ("cracked screen", "won't charge"). Raised at the station, handled by admins.
+    match /issues/{id} {
+      allow read: if isAdmin();
+      allow create: if isOperator()
+        && request.resource.data.status == 'open'
+        && request.resource.data.ts == request.time
+        && request.resource.data.assetId is string
+        && request.resource.data.reportedById is string;
+      allow update: if isAdmin() && audited('issue', id);
+      allow delete: if false;
+    }
+
+    // Saved inventory counts. Written once, never edited.
+    match /counts/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin() && audited('count', id);
+      allow update, delete: if false;
+    }
+
+    // "Checked out but never checked in" alerts. Raised by the scan station when the
+    // next person takes a device that was never returned; resolved by an admin (audited).
+    match /incidents/{id} {
+      allow read: if isAdmin();
+      allow create: if isOperator()
+        && request.resource.data.status == 'open'
+        && request.resource.data.ts == request.time
+        && request.resource.data.assetId is string;
+      allow update: if isAdmin() && audited('incident', id);
+      allow delete: if false;
+    }
+
+    // Immutable changelog of every admin action.
+    match /auditLog/{id} {
+      allow read: if isAdmin();
+      allow create: if isAdmin()
+        && request.resource.data.adminUid == request.auth.uid
+        && request.resource.data.ts == request.time;
+      allow update, delete: if false;
+    }
+
+    match /admins/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && audited('admin', uid)
+        && (uid != request.auth.uid || request.resource.data.active == true);   // can't deactivate yourself
+      allow delete: if false;
+    }
+
+    match /stations/{uid} {
+      allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
+      allow list: if isAdmin();
+      allow create, update: if isAdmin() && audited('station', uid);
+      allow delete: if false;
+    }
+  }
+}
