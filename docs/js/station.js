@@ -3,7 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=10";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=12";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -16,6 +16,9 @@ const ICONS = {
   error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.01"/><path d="M10.3 3.9L2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
 };
 
+let mode = null;             // null = home screen, otherwise "out" | "in" | "report"
+let camHandle = null;        // the open camera scanner, if any
+const RESULT_SECS = Math.min(S.RESULT_SECONDS ?? 3, 3);   // success cards go back to the home screen after ~3 seconds
 let pending = null;          // {id, name, source, method, rec, pin: null | {need, tries, first, verified, created}}
 let report = null;           // damage report in progress: {step: "device"|"note"|"who"|"pin", asset, note}
 let reportTimer = null;
@@ -70,28 +73,52 @@ function pinCopy(p) {
   return "Enter your PIN, then press Enter.";
 }
 
+/** The home screen: three big buttons. (Scanning here still works as a shortcut: a badge starts a check-out, a device a check-in.) */
 function idle() {
   clearTimers();
   clearTimeout(reportTimer);
   report = null;
+  mode = null;
   $("#reportPanel").classList.add("hidden");
-  $("#reportBtn").disabled = false;
   pending = null;
+  camHandle?.close?.();
+  document.body.classList.add("home");
   setPinUi(false);
   setStage("idle", {
-    title: "Scan your badge or enter your employee ID",
-    sub: "To take a device, scan your badge (or type your employee ID), then scan the device. To return one, just scan the device.",
+    title: "What would you like to do?",
+    sub: "Tap a button. Or just scan: a badge starts a check-out, a device starts a check-in.",
   });
   focusScan();
+}
+
+/** The prompt for the current step of Check out / Check in (not used for reports). */
+function modeStep() {
+  clearTimers();
+  setPinUi(false);
+  document.body.classList.remove("home");
+  if (mode === "in") setStage("pending", { title: "Scan the device you're returning", name: "", sub: "Step 1 of 1 · or type its ID below" });
+  else setStage("pending", { title: "Scan your badge", name: "", sub: "Step 1 of 2 · or type your employee ID below" });
+  pendingTimer = setTimeout(idle, 60000);
+  focusScan();
+}
+
+function startMode(m) {
+  hideHint();
+  pending = null;
+  report = null;
+  mode = m;
+  if (m === "report") return startReport();
+  modeStep();
 }
 
 function showPending() {
   clearTimers();
   const needPin = pinActive();
+  document.body.classList.remove("home");
   setPinUi(needPin);
   setStage("pending", {
-    title: `Hi, ${pending.name}`, name: "",
-    sub: needPin ? pinCopy(pending.pin) : `${pending.pin?.created ? "PIN saved. " : ""}Now scan the device you're taking.`,
+    title: needPin ? `Hi, ${pending.name}` : "Now scan the device", name: needPin ? "" : pending.name,
+    sub: needPin ? pinCopy(pending.pin) : `${pending.pin?.created ? "PIN saved. " : ""}Step 2 of 2 · or type its ID below`,
   });
   const secs = needPin ? PIN_SECONDS : S.EMPLOYEE_PENDING_SECONDS;
   const bar = $("#stBar");
@@ -115,7 +142,14 @@ function showResult(kind, o, seconds = S.RESULT_SECONDS) {
   if (!(kind === "error" && o.keepPending && pending)) setPinUi(false);
   setStage(kind, o);
   beep(kind === "error" ? "error" : kind);
-  resetTimer = setTimeout(() => (pending && kind === "error" && o.keepPending ? resumePending() : idle()), seconds * 1000);
+  document.body.classList.remove("home");
+  if (kind !== "error") camHandle?.close?.();   // done: put the camera away
+  resetTimer = setTimeout(() => {
+    if (pending && kind === "error" && o.keepPending) return resumePending();
+    if (kind === "error" && (mode === "out" || mode === "in")) return modeStep();
+    if (kind === "error" && mode === "report" && report) return report.asset ? reportWhyStep(report.asset) : startReport();
+    idle();
+  }, seconds * 1000);
   focusScan();
 }
 
@@ -125,7 +159,7 @@ const showError = (message, { title = "Can't do that", keepPending = false } = {
 };
 
 function focusScan() {
-  if ($("#manual").open || (report && report.step === "note")) return;
+  if (report && report.step === "note") return;
   const s = $("#scan");
   if (document.activeElement !== s) s.focus({ preventScroll: true });
 }
@@ -173,7 +207,12 @@ async function processCode(code, source) {
   if (report) return processReportScan(code, source);
   const found = await lookup(code);
   if (found.kind === "unknown")
-    return showError(`“${code}” isn't a known badge, employee ID or device. Try again, or enter it manually below.`, { title: "Not recognised", keepPending: !!pending });
+    return showError(`“${code}” isn't a known badge, employee ID or device. Try again.`, { title: "Not recognised", keepPending: !!pending });
+  if (mode === "in") {
+    if (found.kind === "employee") return showError("That's a badge. Scan the device you're returning.", { title: "Scan the device" });
+    if (found.rec.active && found.rec.status !== "out") return showError(`${found.rec.id} is already checked in.`, { title: "Already checked in" });
+    return processAsset(found.rec, source);
+  }
   if (found.kind === "employee") return processEmployee(found.rec, source, found.method);
   return processAsset(found.rec, source);
 }
@@ -200,6 +239,7 @@ async function processAsset(asset, source) {
   const d = decide({ employee, asset, held, allowMultiple: S.ALLOW_MULTIPLE_PER_EMPLOYEE });
 
   if (d.action === "error") return showError(d.message, { title: titleFor(d.code, asset) });
+  if (mode === "out" && d.action === "checkin") return showError(`You already have ${asset.id}. To return it, go back and tap Check in.`, { title: "You already have it" });
 
   const logSource = source === "manual" || pending?.source === "manual" ? "manual" : "scan";
   const result = await commit(d, asset, employee, logSource);
@@ -208,14 +248,14 @@ async function processAsset(asset, source) {
   const label = `${asset.id}${asset.model || asset.category ? " · " + (asset.model || asset.category) : ""}`;
   if (result.kind === "out") {
     const note = result.takeoverFrom ? `\nHeads-up: it was still checked out to ${result.takeoverFrom}. An admin will follow up.` : "";
-    showResult("out", { title: "CHECKED OUT", name: employee.name, sub: `${label} · ${fmtTime(new Date())}${note}` }, note ? S.RESULT_SECONDS + 3 : S.RESULT_SECONDS);
+    showResult("out", { title: "CHECKED OUT", name: employee.name, sub: `${label} · ${fmtTime(new Date())}${note}` }, note ? RESULT_SECS + 4 : RESULT_SECS);
     offerIssue(asset.id, employee.id);
   } else {
     showResult("in", {
       title: "CHECKED IN",
       name: result.holderName,
       sub: `${label} · returned ${fmtTime(new Date())}${result.minutes != null ? " · held " + fmtDur(result.minutes) : ""}`,
-    });
+    }, RESULT_SECS);
     offerIssue(asset.id, result.holderId);
   }
 }
@@ -286,29 +326,31 @@ function reportStage(title, sub, secs = 90) {
 function startReport(asset = null) {
   hideHint();
   pending = null;
+  mode = "report";
   report = { step: "device", asset: null, note: "" };
-  $("#reportBtn").disabled = true;
-  if (asset) return reportNoteStep(asset);
+  document.body.classList.remove("home");
+  if (asset) return reportWhyStep(asset);
   setPinUi(false);
-  reportStage("Report a damaged device", "Step 1 of 3: scan the damaged device (or type its ID below and press Enter).");
+  reportStage("Scan the damaged device", "Step 1 of 3 · or type its ID below", 90);
   focusScan();
 }
 
-function reportNoteStep(asset) {
+function reportWhyStep(asset) {
   report.asset = asset;
-  report.step = "note";
+  report.step = "why";
   setPinUi(false);
-  reportStage(`What's wrong with ${asset.id}?`, "Step 2 of 3: type the problem, then press Enter.", 120);
+  reportStage(`What's wrong with ${asset.id}?`, "Step 2 of 3 · tap one", 120);
   $("#reportPanel").classList.remove("hidden");
+  $("#whyChips").classList.remove("hidden");
+  $("#otherForm").classList.add("hidden");
   $("#rNote").value = "";
   $("#rErr").textContent = "";
-  $("#rNote").focus();
 }
 
 function reportWhoStep() {
   report.step = "who";
   $("#reportPanel").classList.add("hidden");
-  reportStage("Now scan your badge or enter your employee ID", `Step 3 of 3: this sends the report for ${report.asset.id}.`, 45);
+  reportStage("Now scan your badge", `Step 3 of 3 · or type your employee ID below · sends the report for ${report.asset.id}`, 45);
   focusScan();
 }
 
@@ -316,13 +358,13 @@ function reportWhoStep() {
 async function processReportScan(code, source) {
   if (report.step === "device") {
     const found = await lookup(code);
-    if (found.kind !== "asset") return reportStage("Report a damaged device", `“${code}” isn't a device. Scan the damaged device itself.`);
-    return reportNoteStep(found.rec);
+    if (found.kind !== "asset") return reportStage("Scan the damaged device", `“${code}” isn't a device. Scan the damaged device itself.`);
+    return reportWhyStep(found.rec);
   }
-  if (report.step === "note" || report.step === "pin" || report.step === "saving") return; // typing the problem, entering a PIN, or already sending
+  if (report.step === "why" || report.step === "note" || report.step === "pin" || report.step === "saving") return; // choosing the problem, entering a PIN, or already sending
   // step "who"
   const found = await lookup(code);
-  if (found.kind !== "employee") return reportStage("Now scan your badge or enter your employee ID", `“${code}” isn't a known badge or employee ID. Try again.`, 45);
+  if (found.kind !== "employee") return reportStage("Now scan your badge", `“${code}” isn't a known badge or employee ID. Try again.`, 45);
   if (!found.rec.active) return showError(`${found.rec.name}'s ID is inactive. See your supervisor.`, { title: "ID not active" });
   const need = pinNeed(settings, found.rec);
   pending = { id: found.rec.id, name: found.rec.name, source, method: found.method, rec: found.rec, pin: need === "none" ? null : { need, tries: 0, first: null, verified: false, created: false } };
@@ -355,7 +397,6 @@ async function submitReport() {
   await b.commit();
   report = null;
   pending = null;
-  $("#reportBtn").disabled = false;
   const seconds = Math.max(S.RESULT_SECONDS, 15);
   showResult("in", {
     title: "REPORT SENT",
@@ -364,10 +405,22 @@ async function submitReport() {
   }, seconds);
 }
 
-$("#reportBtn").addEventListener("click", () => startReport());
+$("#modeOut").addEventListener("click", () => startMode("out"));
+$("#modeIn").addEventListener("click", () => startMode("in"));
+$("#modeReport").addEventListener("click", () => startMode("report"));
 $("#issueHint").addEventListener("click", () => startReport({ id: $("#issueHint").dataset.asset }));
 $("#reportCancel").addEventListener("click", () => { scan.value = ""; idle(); });
-$("#reportPanel").addEventListener("submit", (e) => {
+$("#whyChips").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-why]");
+  if (b) { report.note = b.dataset.why; reportWhoStep(); }
+});
+$("#whyOther").addEventListener("click", () => {
+  report.step = "note";
+  $("#whyChips").classList.add("hidden");
+  $("#otherForm").classList.remove("hidden");
+  $("#rNote").focus();
+});
+$("#otherForm").addEventListener("submit", (e) => {
   e.preventDefault();
   const note = $("#rNote").value.trim();
   if (!note) { $("#rErr").textContent = "Type what's wrong first."; return; }
@@ -515,19 +568,24 @@ $("#signOut").addEventListener("click", () => A.signOut(auth));
 
 // ───────── input wiring ─────────
 const scan = $("#scan");
+// A barcode scanner "types" the whole code within a few milliseconds; a person typing is much slower. Typed IDs are logged as "manual".
+let typedFrom = null;
 function submitScan() {
   const code = norm(scan.value);
+  const perChar = typedFrom && code ? (Date.now() - typedFrom) / code.length : 0;
+  const source = perChar > 150 ? "manual" : "scan";
   scan.value = "";
+  typedFrom = null;
   updateDots();
   if (!code) return;
   if (pinActive()) enqueue(() => handlePin(code));
-  else enqueue(() => processCode(code, "scan"));
+  else enqueue(() => processCode(code, source));
 }
 scan.addEventListener("keydown", (e) => {
   if (e.key === "Enter" || e.key === "Tab") { e.preventDefault(); submitScan(); return; }
   if (e.key === "Escape") { scan.value = ""; idle(); }
 });
-scan.addEventListener("input", updateDots);
+scan.addEventListener("input", () => { if (!typedFrom && scan.value) typedFrom = Date.now(); if (!scan.value) typedFrom = null; updateDots(); });
 
 $("#keypad").addEventListener("click", (e) => {
   const b = e.target.closest("[data-k]");
@@ -538,36 +596,7 @@ $("#keypad").addEventListener("click", (e) => {
   else if (scan.value.length < 6) { scan.value += k; updateDots(); }
 });
 
-$("#clearBtn").addEventListener("click", () => { scan.value = ""; idle(); });
-
-$("#manualForm").addEventListener("submit", (e) => {
-  e.preventDefault();
-  const emp = norm($("#mEmp").value), ph = norm($("#mPhone").value);
-  if (!emp && !ph) return;
-  enqueue(async () => {
-    if (emp) {
-      const r = await lookup(emp);
-      if (r.kind !== "employee") return showError(`“${emp}” isn't a known employee ID or badge number.`, { title: "Not recognised" });
-      if (!processEmployee(r.rec, "manual", r.method)) return;
-      if (pinActive()) return; // they now need to enter their PIN; the device is scanned afterwards
-    }
-    if (ph) {
-      const r = await lookup(ph);
-      if (r.kind !== "asset") return showError(`“${ph}” isn't a known device ID.`, { title: "Not recognised" });
-      await processAsset(r.rec, "manual");
-    }
-  });
-  $("#mEmp").value = ""; $("#mPhone").value = "";
-  $("#manual").open = false;
-});
-
-$("#manual").addEventListener("toggle", () => {
-  const open = $("#manual").open;
-  $("#manualBtn").setAttribute("aria-expanded", String(open));
-  if (open) { $("#mEmp").focus(); $("#manual").scrollIntoView?.({ block: "nearest", behavior: "smooth" }); } else focusScan();
-});
-$("#manualBtn").addEventListener("click", () => { $("#manual").open = !$("#manual").open; });
-$("#manualClose").addEventListener("click", () => { $("#manual").open = false; });
+$("#backBtn").addEventListener("click", () => { scan.value = ""; idle(); });
 
 // Touch screens: the scan field normally keeps the keyboard hidden (so a hardware scanner never pops it up);
 // tapping it brings up the normal letters keyboard.
@@ -577,26 +606,25 @@ if (mq("(pointer: coarse)")) {
   scan.addEventListener("blur", () => { scan.inputMode = "none"; });
 }
 
-// Camera scanning (phones/tablets, or any device with a camera). The camera stays open between scans (badge, then device)
-// and mirrors what the station is asking for; it closes by itself when a PIN is needed so the keypad is visible.
+// Camera scanning (phones/tablets). It stays open between the steps of one task (badge, then device), shows the current step,
+// and puts itself away when the result appears or when a PIN is needed so the keypad is visible.
 if (cameraSupported() && mq("(pointer: coarse)")) {
   const cam = $("#camBtn");
   cam.hidden = false;
-  let open = null;
   cam.addEventListener("click", async () => {
-    if (open) return;
-    open = true;
-    open = await openCameraScanner({
+    if (camHandle) return;
+    camHandle = true;
+    camHandle = await openCameraScanner({
       title: "Scan with the camera",
       mirror: () => (busy ? { title: "Checking…", sub: "One moment" } : { title: $("#stTitle").textContent, name: $("#stName").textContent, sub: $("#stSub").textContent }),
       onCode: (code) => {
         scan.value = code; submitScan();
-        chain.then(() => { if (pinActive()) open?.close?.(); });   // a PIN is needed: close the camera so the keypad shows
+        chain.then(() => { if (pinActive()) camHandle?.close?.(); });
         return true;
       },
-      onClose: () => { open = null; },
-      onManual: () => { if (!$("#manual").open) $("#manualBtn").click(); },
-    }).catch((e) => { open = null; showError(e.message, { title: "Camera" }); });
+      onClose: () => { camHandle = null; },
+      onManual: () => { scan.inputMode = "text"; scan.focus(); },
+    }).catch((e) => { camHandle = null; showError(e.message, { title: "Camera" }); });
   });
 }
 
@@ -608,7 +636,7 @@ bigScreen?.addEventListener?.("change", syncRecent);
 
 // keep the scanner field focused so a scan always lands somewhere
 setInterval(() => {
-  if ($("#app").classList.contains("hidden") || $("#manual").open || (report && report.step === "note")) return;
+  if ($("#app").classList.contains("hidden") || (report && report.step === "note")) return;
   const t = document.activeElement?.tagName;
   if (t !== "INPUT" && t !== "TEXTAREA" && t !== "SUMMARY") focusScan();
 }, 700);

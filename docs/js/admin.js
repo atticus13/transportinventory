@@ -8,7 +8,7 @@ import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
 import { classifyScan, summarizeCount } from "./inventory-logic.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=10";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=12";
 import { staleStaff, worthChecking, snoozeUntil, STALE_DAYS, SNOOZE_DAYS } from "./stale-logic.js";
 
 const REPORT_MAX = 5000;
@@ -192,6 +192,21 @@ $("#loginForm").addEventListener("submit", async (e) => {
   $("#lErr").textContent = "";
   try { await A.signInWithEmailAndPassword(auth, $("#lEmail").value.trim(), $("#lPass").value); }
   catch (err) { $("#lErr").textContent = friendlyAuthError(err); }
+});
+$("#forgotBtn").addEventListener("click", async () => {
+  const email = $("#lEmail").value.trim();
+  const out = $("#lErr");
+  out.style.color = "";
+  if (!email) { out.textContent = "Type your email above first, then tap “Forgot password?”."; return; }
+  try {
+    await A.sendPasswordResetEmail(auth, email);
+    out.style.color = "var(--ok)";
+    out.textContent = `If ${email} has an admin login, a password reset link is on its way. Check your inbox (and spam).`;
+  } catch (err) {
+    const c = err?.code || "";
+    if (c.includes("user-not-found")) { out.style.color = "var(--ok)"; out.textContent = `If ${email} has an admin login, a password reset link is on its way. Check your inbox (and spam).`; }
+    else out.textContent = friendlyAuthError(err);
+  }
 });
 $("#signOut").addEventListener("click", () => { sessionStorage.removeItem("audit-login-" + me?.uid); A.signOut(auth); });
 

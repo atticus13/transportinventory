@@ -77,7 +77,7 @@ Edit the file in GitHub (pencil → Commit). Pages republishes in about a minute
 ### Badge number vs employee ID
 A badge's barcode is usually the employee ID plus a few extra digits. Each person has an **employee ID** and, optionally, a **badge number** (Staff tab). At the station they can scan the badge *or* scan/type the employee ID; both find the same person. Every check-out and check-in records which one was used (**Badge**, **Employee ID**, or **Device only** when a device is returned by scanning it alone). It shows in the Reports activity table and CSV ("ID Used"), and the report's staff table counts badge scans vs ID entries per person. A badge number can't equal any other employee ID, device ID or badge number.
 
-The station resets 20 s after a badge scan; **Start over** / **Esc** resets immediately. **Manual** is there if the scanner breaks.
+The station home screen has three buttons: **Check out** (badge, then device), **Check in** (just the device) and **Report damaged**. Scanning from the home screen also works as a shortcut (a badge starts a check-out, a device a check-in). Every step accepts a hardware scanner, the **📷 Camera** button (phones/tablets) or typing the ID in the field (typed IDs are logged as "manual"). After a result the station returns to the home screen by itself after about 3 seconds (and the camera closes). **← Back** / **Esc** goes home immediately; an idle step times out after a minute.
 
 ### Missed returns
 If a device is taken while still checked out to someone else, the station allows it, the previous holder gets a "not returned" log entry, and an alert opens for admins (bell badge, banner, Alerts tab). An admin resolves it with a reason; that is recorded in the changelog.
@@ -87,7 +87,7 @@ If a device is taken while still checked out to someone else, the station allows
 *Honest limit:* this is a speed bump against someone scanning another person's badge, not strong security. The hash is checked in the browser.
 
 ### Report a damaged device
-At the station press **Report a damaged device**: (1) scan the device, (2) type what's wrong, (3) scan your badge or enter your employee ID. The screen then says to place the device on your supervisor's desk. If the person reporting is the one holding the device, it is also checked back in. (After any check-in the station also offers a "Something wrong with…?" button that starts at step 2.) Reports show in **Alerts → Reported problems** and in the bell count. Resolve them there, optionally sending the device for repair (takes it out of service).
+At the station press **Report damaged**: (1) scan the device, (2) tap what's wrong (Cracked screen, Won't charge, Won't turn on, Case missing or broken, or Something else… to type it), (3) scan your badge or enter your employee ID. The screen then says to place the device on your supervisor's desk. If the person reporting is the one holding the device, it is also checked back in. (After any check-in the station also offers a "Something wrong with…?" button that starts at step 2.) Reports show in **Alerts → Reported problems** and in the bell count. Resolve them there, optionally sending the device for repair (takes it out of service).
 
 ### Lost / retired devices
 **Assets → Take out of service…** with a reason: Lost, Stolen, Out for repair, Retired, Removed. The station then blocks it with a reason-specific message. **Restore** puts it back in service.
@@ -174,3 +174,7 @@ On phones and tablets the scan station has a **📷 Camera** button (and the adm
 
 ## Rules tests (emulator)
 See the header of `tests/rules.test.mjs`. Needs Node, Java 11+ and `npm i --no-save firebase-tools @firebase/rules-unit-testing firebase`, then `npx firebase emulators:exec --only firestore --project demo-phone "node --test tests/rules.test.mjs"`.
+
+
+## Forgotten admin password
+The admin sign-in page has **Forgot password?**: type your email, tap it, and Firebase emails a reset link. Admins can also be sent one from the Admins tab.

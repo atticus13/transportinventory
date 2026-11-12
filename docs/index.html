@@ -38,24 +38,26 @@
     .scanrow input { font-family: var(--mono); font-size: 20px; padding: 15px 18px; border-radius: 12px; letter-spacing: 0.04em; }
     .scanrow input { flex: 1; min-width: 0; }
 
-    /* Two equal action buttons, same size and aligned */
-    .actions { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .act { display: flex; align-items: center; gap: 14px; min-height: 80px; padding: 14px 18px; border-radius: 16px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; width: 100%; }
-    .act:hover { border-color: var(--blue-hi); }
-    .act .ai { font-size: 28px; width: 44px; height: 44px; display: grid; place-items: center; flex: none; }
-    .act b { display: block; font-size: 17px; }
-    .act small { display: block; color: var(--muted); font-size: 13.5px; margin-top: 2px; font-weight: 500; line-height: 1.3; }
-    .act.warn-btn { background: rgba(245,158,11,.12); border-color: rgba(245,158,11,.5); color: #fbbf24; }
-    .act.warn-btn small { color: #d9a441; }
-    .act:disabled { opacity: 0.5; cursor: not-allowed; }
-
-    /* Manual entry: opened by the "Type IDs instead" button */
-    details.manual:not([open]) { display: none; }
-    details.manual > summary { display: none; }
-    .manual-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
-    .manual-head h3 { margin: 0; }
-    .fieldrow { display: flex; gap: 8px; }
-    .fieldrow input { flex: 1; min-width: 0; }
+    /* Home: three big buttons */
+    .modes { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+    .mode { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; min-height: 120px; padding: 16px; border-radius: 18px; border: 1px solid var(--line); background: var(--surface-2); color: var(--text); font: inherit; text-align: center; cursor: pointer; width: 100%; }
+    .mode:hover { border-color: var(--blue-hi); }
+    .mode .mi { font-size: 34px; line-height: 1; }
+    .mode b { font-size: 20px; }
+    .mode small { color: var(--muted); font-size: 13.5px; font-weight: 500; line-height: 1.3; }
+    .mode.m-out { background: linear-gradient(160deg, rgba(255,138,31,.22), rgba(255,138,31,.08)); border-color: rgba(255,138,31,.55); }
+    .mode.m-in { background: linear-gradient(160deg, rgba(61,220,132,.20), rgba(61,220,132,.07)); border-color: rgba(61,220,132,.5); }
+    .mode.m-report { background: rgba(245,158,11,.10); border-color: rgba(245,158,11,.45); color: #fbbf24; }
+    .mode.m-report small { color: #d9a441; }
+    .mode b, .mode small { display: block; }
+    body:not(.home) .modes { display: none; }
+    .station > .stage { order: 0; } .station > .modes { order: 1; } .station > .scanrow { order: 2; } .station > .keypad { order: 3; } .station > .recent-box { order: 4; }
+    body.home:not(.kiosk) .stage { min-height: 220px; padding: 24px; }
+    body.home .stage .icon { display: none; }
+    body.home #backBtn { display: none; }
+    body.home .scanrow #camBtn { display: none; }
+    .why-chips { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+    .why-chips .btn { justify-content: center; min-height: 56px; font-size: 16px; white-space: normal; }
 
     /* Recent activity: always shown at the bottom on a big screen with a mouse; behind a button on phones and tablets */
     .recent-box > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none; min-height: 44px; }
@@ -71,14 +73,14 @@
 
     /* Touch screens (phones, tablets): bigger buttons and fields, number keyboard */
     @media (pointer: coarse) {
+      body.home .scanrow { display: none; }
       .btn { min-height: 52px; font-size: 16px; padding: 12px 20px; }
       .btn.sm { min-height: 46px; padding: 10px 16px; }
-      .scanrow input, .report-panel input, #manualForm input { min-height: 58px; font-size: 22px; }
+      .scanrow input, .report-panel input { min-height: 58px; font-size: 22px; }
       .keypad { grid-template-columns: repeat(3, minmax(84px, 124px)); gap: 14px; }
       .keypad button { font-size: 34px; padding: 20px 0; }
-      .act { min-height: 92px; }
-      .act b { font-size: 19px; }
-      .act small { font-size: 14.5px; }
+      .mode { min-height: 132px; }
+      .mode b { font-size: 22px; }
       .recent-box > summary { min-height: 52px; }
       .stage { min-height: 300px; }
     }
@@ -93,7 +95,9 @@
       .stage .title { font-size: 22px; }
       .stage .name { font-size: 20px; }
       .stage .sub { font-size: 14px; }
-      .actions { grid-template-columns: 1fr; }
+      .modes { grid-template-columns: 1fr; }
+      .mode { flex-direction: row; justify-content: flex-start; text-align: left; min-height: 84px; gap: 16px; }
+      .mode small { display: block; }
       .keypad { grid-template-columns: repeat(3, 1fr); }
       .scanrow { flex-wrap: wrap; }
       .scanrow input { flex: 1 1 100%; }
@@ -174,19 +178,29 @@
         <div class="sub" id="stSub"></div>
         <div class="pins hidden" id="stPins" aria-hidden="true"></div>
         <button class="btn sm issue-hint hidden" id="issueHint" type="button"></button>
-        <form id="reportPanel" class="report-panel hidden" autocomplete="off">
-          <input id="rNote" type="text" maxlength="300" placeholder="e.g. cracked screen, won't charge, case missing" aria-label="What is wrong with the device" />
-          <div class="row"><button class="btn primary" type="submit">Next</button><button class="btn ghost" type="button" id="reportCancel">Cancel</button></div>
+        <div id="reportPanel" class="report-panel hidden">
+          <div class="why-chips" id="whyChips">
+            <button class="btn" type="button" data-why="Cracked screen">Cracked screen</button>
+            <button class="btn" type="button" data-why="Won't charge">Won't charge</button>
+            <button class="btn" type="button" data-why="Won't turn on">Won't turn on</button>
+            <button class="btn" type="button" data-why="Case missing or broken">Case missing or broken</button>
+            <button class="btn" type="button" id="whyOther" style="grid-column:1/-1">Something else…</button>
+          </div>
+          <form id="otherForm" class="hidden" autocomplete="off">
+            <input id="rNote" type="text" maxlength="300" placeholder="What's wrong?" aria-label="What is wrong with the device" />
+            <div class="row"><button class="btn primary" type="submit">Next</button></div>
+          </form>
+          <div class="row"><button class="btn ghost" type="button" id="reportCancel">Cancel</button></div>
           <div class="err-text" id="rErr"></div>
-        </form>
+        </div>
         <div class="bar"><i id="stBar"></i></div>
       </section>
 
       <div class="scanrow">
         <input id="scan" type="text" inputmode="none" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
                placeholder="Scanner ready" aria-label="Barcode scan field" />
-        <button class="btn" id="camBtn" type="button" hidden aria-label="Scan with the camera">📷 Camera</button>
-        <button class="btn" id="clearBtn" title="Cancel and start over (Esc)">Start over</button>
+        <button class="btn primary" id="camBtn" type="button" hidden aria-label="Scan with the camera">📷 Camera</button>
+        <button class="btn" id="backBtn" type="button" title="Back to the start (Esc)">← Back</button>
       </div>
 
       <div class="keypad hidden" id="keypad" aria-label="PIN keypad">
@@ -196,28 +210,11 @@
         <button class="btn" data-k="back" aria-label="Backspace">⌫</button><button class="btn" data-k="0">0</button><button class="btn primary" data-k="enter" aria-label="Enter">↵</button>
       </div>
 
-      <div class="actions">
-        <button class="act warn-btn" id="reportBtn" type="button"><span class="ai" aria-hidden="true">⚠</span><span><b>Report a damaged device</b><small>Scan it, say what's wrong, then scan your badge</small></span></button>
-        <button class="act" id="manualBtn" type="button" aria-expanded="false" aria-controls="manual"><span class="ai" aria-hidden="true">⌨</span><span><b>Type IDs instead</b><small>Scanner not working? Enter them by hand</small></span></button>
+      <div class="modes">
+        <button class="mode m-out" id="modeOut" type="button"><span class="mi" aria-hidden="true">➜</span><span><b>Check out</b><small>Take a device</small></span></button>
+        <button class="mode m-in" id="modeIn" type="button"><span class="mi" aria-hidden="true">✔</span><span><b>Check in</b><small>Return a device</small></span></button>
+        <button class="mode m-report" id="modeReport" type="button"><span class="mi" aria-hidden="true">⚠</span><span><b>Report damaged</b><small>Something's wrong with a device</small></span></button>
       </div>
-
-      <details class="manual card" id="manual">
-        <summary>Manual entry</summary>
-        <div class="manual-head"><h3>Type the IDs</h3><button class="btn ghost sm" type="button" id="manualClose">Close</button></div>
-        <form id="manualForm" class="form-grid" style="grid-template-columns:1fr">
-          <label class="f">Badge or employee ID <span style="text-transform:none;font-weight:400">(leave blank to return a device)</span>
-            <span class="fieldrow"><input id="mEmp" type="text" inputmode="text" enterkeyhint="next" autocomplete="off" autocapitalize="characters" /></span>
-          </label>
-          <label class="f">Device ID <span style="text-transform:none;font-weight:400">(e.g. PH-001)</span>
-            <span class="fieldrow"><input id="mPhone" type="text" inputmode="text" enterkeyhint="go" autocomplete="off" autocapitalize="characters" /></span>
-          </label>
-          <button class="btn primary" type="submit" style="justify-content:center">Submit</button>
-        </form>
-      </details>
-
-      <p class="help" style="text-align:center">
-        <b>To take a device:</b> scan your ID, then the device. &nbsp;·&nbsp; <b>To return it:</b> just scan the device.
-      </p>
 
       <details class="card recent-box" id="recentBox">
         <summary><h3>Recent activity</h3><span class="chev" aria-hidden="true">▾</span></summary>
@@ -226,6 +223,6 @@
     </main>
   </div>
 
-  <script type="module" src="js/station.js?v=10"></script>
+  <script type="module" src="js/station.js?v=12"></script>
 </body>
 </html>
