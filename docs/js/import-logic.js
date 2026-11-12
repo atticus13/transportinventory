@@ -58,13 +58,14 @@ const findCol = (header, names) => {
 };
 
 const cellOf = (r, i) => (i === -1 ? "" : String(r[i] ?? "").trim());
+const FIELD_LABEL = { model: "model", phoneNumber: "phone number", imei: "IMEI", serial: "serial number" };
 const BAD_ID = (v) => `“${v}” has characters we can't use (letters, numbers, . - _ only).`;
 
 /**
  * rows         : array of arrays (first row = header)
  * existingIds  : Set<string> of every ID already used by an asset, a staff member OR a badge number
  * existingStaff: Map<employeeId, {name, badgeId}>   (staff import: lets a file fill in badge numbers)
- * knownTypes   : [{name, prefix, pad}] existing asset types
+ * knownTypes   : [{name, prefix, pad, fields?}] existing asset types; `fields` lists the detail fields that type requires
  * defaultType  : asset type name for rows that don't specify one
  * returns      : {records, updates, errors:[{line,message}], newTypes:[name], fatal?:string}
  *   staff: records = new people, updates = existing people getting a badge number
@@ -159,6 +160,9 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
     if (!t.info) return errors.push({ line, message: `${rawId || "Row"}: there is no asset type “${t.name}”. Add it under Assets → Asset types first, or fix the spelling — skipped.` });
     const assetType = t.info.name;
     const rec = { assetType, model: cell(r, idx.model), imei: cell(r, idx.imei), serial: cell(r, idx.serial), phoneNumber: cell(r, idx.phoneNumber) };
+    // Whatever detail fields the type is set up with are required (a type with no list of fields requires none)
+    const need = (t.info.fields || []).filter((f) => !rec[f]);
+    if (need.length) return errors.push({ line, message: `${rawId || "Row"}: ${assetType} needs ${need.map((f) => FIELD_LABEL[f]).join(", ")} — skipped.` });
 
     if (!rawId) {
       const dup = dupMessage(rec, "");
@@ -270,7 +274,7 @@ export const TEMPLATES = {
     notes: [
       ["Asset import: how to fill this in"],
       ["assetType", "Required. Must match a type you've already added under Assets → Asset types (for example Rover phone, iPad or Fob). Rows with an unknown type are skipped."],
-      ["model, imei, serial, phoneNumber", "All optional. Leave them blank for simple items like fobs."],
+      ["model, imei, serial, phoneNumber", "Required if the asset type is set up with that field (ticked under Assets → Asset types); rows missing one are skipped. Types without the field (like a fob) can leave it blank."],
       ["assetId", "Leave this blank. Each device is numbered for you from its type's ID letters, using the lowest free number (R001, R002, R003…). Only fill it in to choose a specific barcode, or for a type that has no ID letters."],
       [""],
       ["IDs that already exist are skipped. Format the ID columns as Text so leading zeros are kept. Only the first sheet is imported."],

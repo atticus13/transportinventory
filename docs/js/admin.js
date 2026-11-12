@@ -417,7 +417,7 @@ function typesDialog() {
   d.onclose = null;
   const draw = () => {
     d.innerHTML = `<h2>Asset types</h2>
-      <p class="muted" style="margin-top:0">Categories such as Rover phone, iPad or Fob. This is the only place to add a new type. The <b>ID letters</b> are optional: they start the suggested ID when you add an item (letters <span class="mono">S</span> suggest S001, S002, S003…, always the next number after the highest one used). Leave them empty to type every ID yourself. Tick only the detail fields that make sense for the type. Types are archived, never deleted.</p>
+      <p class="muted" style="margin-top:0">Categories such as Rover phone, iPad or Fob. This is the only place to add a new type. The <b>ID letters</b> are optional: they start the suggested ID when you add an item (letters <span class="mono">S</span> suggest S001, S002, S003…, always the next number after the highest one used). Leave them empty to type every ID yourself. Tick the detail fields this type has: each ticked field is <b>required</b> whenever you add one (leave a field unticked if it doesn't apply, like a fob with no serial number). Types are archived, never deleted.</p>
       <div class="table-wrap"><table><thead><tr><th>Type</th><th>ID letters</th><th>Detail fields</th><th>Active</th><th></th></tr></thead><tbody id="typeRows">
       ${cache.types.map((t) => {
         const n = cache.assets.filter((a) => a.active && a.category === t.name).length;
@@ -433,7 +433,7 @@ function typesDialog() {
           <label class="f">ID letters (optional)<input name="prefix" placeholder="e.g. S" /></label>
         </div>
         <div class="muted" id="typePreview" style="margin:8px 0 0;font-size:13px"></div>
-        <div style="margin:10px 0 8px"><span class="muted">Detail fields:</span> ${fieldBoxes(DETAIL_FIELDS.map(([k]) => k))}</div>
+        <div style="margin:10px 0 8px"><span class="muted">Detail fields (ticked = required):</span> ${fieldBoxes(DETAIL_FIELDS.map(([k]) => k))}</div>
         <button class="btn primary" type="submit">Add type</button>
       </form>
       <div class="err-text" id="typeErr" style="margin-top:8px"></div>
@@ -646,7 +646,7 @@ function assetForm(existing) {
     (!editing ? '<option value="" selected disabled>Choose a type…</option>' : "") +
     (archivedCurrent ? `<option value="${esc(existing.category)}" selected>${esc(existing.category)} (archived)</option>` : "") +
     types.map((t) => `<option value="${esc(t.name)}" ${editing && existing.category === t.name ? "selected" : ""}>${esc(t.name)}</option>`).join("");
-  const detail = (k, label, extra = "") => `<label class="f" data-field="${k}">${label} <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="${k}" value="${esc(a[k])}" ${extra} /><span class="dup-warn err-text" data-dup="${k}" style="text-transform:none;font-weight:600"></span></label>`;
+  const detail = (k, label, extra = "") => `<label class="f" data-field="${k}" data-label="${label}">${label} <span class="muted" data-reqmark style="text-transform:none;font-weight:400"></span><input name="${k}" value="${esc(a[k])}" ${extra} /><span class="dup-warn err-text" data-dup="${k}" style="text-transform:none;font-weight:600"></span></label>`;
 
   const justAdded = new Set();   // IDs saved in this dialog (the live data lags a moment behind)
   let addAnother = false;
@@ -667,7 +667,7 @@ function assetForm(existing) {
           ${detail("phoneNumber", "Phone number")}
           ${detail("imei", "IMEI", 'inputmode="numeric"')}
           ${detail("serial", "Serial number")}
-        </div>${editing ? "" : '<p class="muted" style="font-size:13px;margin-bottom:0">The barcode ID can’t be changed later. Every detail field is optional.</p>'}
+        </div>${editing ? "" : '<p class="muted" style="font-size:13px;margin-bottom:0">The barcode ID can’t be changed later. The detail fields shown are the ones this type is set up with, and each is required.</p>'}
       </div>`,
     onOpen: (d) => {
       const f = $("#dlgForm"), sel = f.elements.category, idEl = f.elements.id;
@@ -687,6 +687,8 @@ function assetForm(existing) {
         $$("[data-field]", f).forEach((el) => {
           const k = el.dataset.field;
           el.classList.toggle("hidden", !(fields.includes(k) || (editing && existing[k])));
+          // Every detail field the type is set up with is required; one kept only because it already has a value is not
+          $("[data-reqmark]", el).textContent = fields.includes(k) ? "(required)" : "(optional)";
         });
         if (!editing) {
           const p = prefixOf(t);
@@ -732,6 +734,8 @@ function assetForm(existing) {
       const hidden = new Set($$("[data-field].hidden", $("#dlgForm")).map((el) => el.dataset.field));
       const vals = Object.fromEntries(DETAIL_FIELDS.map(([k]) => [k, hidden.has(k) ? (existing?.[k] ?? "") : str(fd, k)]));
       if (!category) throw new Error("Choose what kind of item this is.");
+      const missing = fieldsOf(typeByName(category)).filter((k) => !hidden.has(k) && !vals[k]);
+      if (missing.length) throw new Error(`${category} needs ${missing.map((k) => DETAIL_FIELDS.find(([x]) => x === k)[1]).join(", ")}. These fields are required for this type.`);
       const dups = findDuplicates(cache.assets, vals, editing ? existing.id : null);
       if (dups.length) throw new Error(dups.map((d) => `The ${d.label} ${d.value} is already on ${d.assetId}.`).join(" ") + " Check for a typo, or edit that asset instead.");
 
@@ -965,7 +969,7 @@ function importDialog(kind) {
     ? `<label class="f" style="margin-top:10px">Asset type for rows without one<select id="impDefault"><option value="">(none: rows must have an assetType)</option>${activeTypes().map((t) => `<option>${esc(t.name)}</option>`).join("")}</select></label>`
     : "";
   const help = isAsset
-    ? "Columns: assetType (must already exist under Asset types), and optionally model, imei, serial, phoneNumber. You don't need an ID column: every device is numbered for you with the lowest free number for its type (R001, R002…). Add an assetId column only to choose a specific barcode. Rows with an unknown type or a duplicate IMEI, serial or phone number are skipped."
+    ? "Columns: assetType (must already exist under Asset types), and optionally model, imei, serial, phoneNumber. You don't need an ID column: every device is numbered for you with the lowest free number for its type (R001, R002…). Add an assetId column only to choose a specific barcode. Each type's ticked detail fields (model, IMEI, serial, phone number) are required, so rows missing one are skipped, as are rows with an unknown type or a duplicate IMEI, serial or phone number."
     : "Columns: employeeId, name (or firstName and lastName), and optionally badgeId. If someone already exists and the row has a badgeId, their badge number is filled in. Nothing else about them changes.";
   d.innerHTML = `<h2>Import ${isAsset ? "assets" : "staff"} from a spreadsheet</h2>
     <p class="muted" style="margin-top:0">${fileNote} ${help}</p>
@@ -1000,7 +1004,7 @@ function importDialog(kind) {
       existingIds: existing, pad: ID_DIGITS,
       existingAssets: cache.assets,
       existingStaff: new Map(cache.staff.map((x) => [x.id, { name: x.name, badgeId: x.badgeId || "" }])),
-      knownTypes: activeTypes().map((t) => ({ name: t.name, prefix: prefixOf(t), pad: padOf(t) })),
+      knownTypes: activeTypes().map((t) => ({ name: t.name, prefix: prefixOf(t), pad: padOf(t), fields: fieldsOf(t) })),
       defaultType: $("#impDefault")?.value || "",
     });
     const box = $("#impPreview");

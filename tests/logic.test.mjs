@@ -467,3 +467,16 @@ test("asset import: rows that repeat an IMEI/serial/number (existing or earlier 
 test("next suggested ID continues the sequence for a type (R1..R9 → R10)", () => {
   assert.equal(nextIdFor("R", 0, ["R1", "R2", "R3", "R4", "R5", "R6", "R7", "R8", "R9"]), "R10");
 });
+
+test("asset import: the detail fields a type is set up with are required; types without them can leave them blank", () => {
+  const knownTypes = [
+    { name: "Rover phone", prefix: "R", pad: 3, fields: ["model", "phoneNumber", "imei", "serial"] },
+    { name: "Fob", prefix: "F", pad: 3, fields: [] },
+  ];
+  const csv = "assetType,model,imei,serial,phoneNumber\nRover phone,iPhone 13,111,SN1,352-1\nRover phone,iPhone 13,,SN2,352-2\nRover phone,,222,SN3,\nFob,,,,";
+  const { records, errors } = parseImport("asset", parseCSV(csv), { knownTypes });
+  assert.deepEqual(records.map((r) => r.id), ["R001", "F001"]);
+  assert.equal(errors.length, 2);
+  assert.match(errors[0].message, /Rover phone needs IMEI/);
+  assert.match(errors[1].message, /needs model, phone number/);
+});
