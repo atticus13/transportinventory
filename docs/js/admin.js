@@ -199,14 +199,38 @@ function showTab(name) {
   if (!TABS.includes(name)) name = "dashboard";
   currentTab = name;
   history.replaceState(null, "", "#" + name);
-  $$(".tab").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  $$(".tab[data-tab]").forEach((t) => t.classList.toggle("active", t.dataset.tab === name));
+  // Grouped tabs: highlight the group you are in and show the page in its label ("Devices · Assets")
+  $$(".tabgroup").forEach((g) => {
+    const cur = $(`.tab[data-tab="${name}"]`, g);
+    g.classList.toggle("has-active", !!cur);
+    const tg = $(".group-toggle", g);
+    $(".gl", tg).textContent = cur ? `${tg.dataset.label} · ${cur.textContent.trim()}` : tg.dataset.label;
+  });
+  closeMenus();
   TABS.forEach((t) => $("#tab-" + t).classList.toggle("hidden", t !== name));
   if (name === "settings") settingsDirty = false;
   if (name === "inventory") loadCounts();
   updateBell();
   renderCurrent();
 }
-$("#tabs").addEventListener("click", (e) => { const t = e.target.closest(".tab"); if (t) showTab(t.dataset.tab); });
+function closeMenus(except = null) {
+  $$(".tabgroup.open").forEach((g) => { if (g !== except) { g.classList.remove("open"); $(".group-toggle", g).setAttribute("aria-expanded", "false"); } });
+}
+$("#tabs").addEventListener("click", (e) => {
+  const toggle = e.target.closest(".group-toggle");
+  if (toggle) {
+    const g = toggle.closest(".tabgroup");
+    closeMenus(g);
+    const open = g.classList.toggle("open");
+    toggle.setAttribute("aria-expanded", String(open));
+    return;
+  }
+  const t = e.target.closest(".tab[data-tab]");
+  if (t) showTab(t.dataset.tab);
+});
+document.addEventListener("click", (e) => { if (!e.target.closest(".tabgroup")) closeMenus(); });
+document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenus(); });
 $("#bell").addEventListener("click", () => showTab("alerts"));
 $("#alertBarGo").addEventListener("click", () => showTab("alerts"));
 

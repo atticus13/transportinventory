@@ -104,7 +104,7 @@ Station → **Kiosk** button: fullscreen, screen kept awake, remembered on that 
 ---
 
 ## Admin portal
-Dashboard · Alerts · Assets · Staff · Inventory · Shift sweep · Reports · Admins · Changelog · Settings.
+The menu bar has **Dashboard**, **Alerts**, then three drop-down groups: **Devices** (Assets, Inventory count, Shift sweep), **People** (Staff, Admins) and **Reports & logs** (Reports, Changelog), then **Settings**. On a phone the groups flatten into one scrolling row.
 Bulk label printing with saved templates is in Assets/Staff (tick rows → **Print N labels…**). CSV import for staff (`employeeId,name`) and assets (`assetType,model,imei,serial,phoneNumber`). "Remove" never erases anything; history is kept.
 
 ## Admin portal notes

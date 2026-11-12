@@ -83,13 +83,28 @@
     <nav class="tabs" id="tabs">
       <button class="tab active" data-tab="dashboard">Dashboard</button>
       <button class="tab" data-tab="alerts">Alerts <span class="badge hidden" id="alertTabCount">0</span></button>
-      <button class="tab" data-tab="assets">Assets</button>
-      <button class="tab" data-tab="staff">Staff</button>
-      <button class="tab" data-tab="inventory">Inventory</button>
-      <button class="tab" data-tab="sweep">Shift sweep</button>
-      <button class="tab" data-tab="reports">Reports</button>
-      <button class="tab" data-tab="admins">Admins</button>
-      <button class="tab" data-tab="changelog">Changelog</button>
+      <div class="tabgroup" data-group="devices">
+        <button class="tab group-toggle" type="button" aria-haspopup="true" aria-expanded="false" data-label="Devices"><span class="gl">Devices</span> <span class="caret" aria-hidden="true">▾</span></button>
+        <div class="tabmenu">
+          <button class="tab" data-tab="assets">Assets</button>
+          <button class="tab" data-tab="inventory">Inventory count</button>
+          <button class="tab" data-tab="sweep">Shift sweep</button>
+        </div>
+      </div>
+      <div class="tabgroup" data-group="people">
+        <button class="tab group-toggle" type="button" aria-haspopup="true" aria-expanded="false" data-label="People"><span class="gl">People</span> <span class="caret" aria-hidden="true">▾</span></button>
+        <div class="tabmenu">
+          <button class="tab" data-tab="staff">Staff</button>
+          <button class="tab" data-tab="admins">Admins</button>
+        </div>
+      </div>
+      <div class="tabgroup" data-group="logs">
+        <button class="tab group-toggle" type="button" aria-haspopup="true" aria-expanded="false" data-label="Reports &amp; logs"><span class="gl">Reports &amp; logs</span> <span class="caret" aria-hidden="true">▾</span></button>
+        <div class="tabmenu">
+          <button class="tab" data-tab="reports">Reports</button>
+          <button class="tab" data-tab="changelog">Changelog</button>
+        </div>
+      </div>
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
 

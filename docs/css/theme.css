@@ -129,6 +129,26 @@ td.actions { white-space: nowrap; text-align: right; }
 .tab { padding: 13px 16px; font-weight: 600; font-size: 14px; color: var(--muted); border-bottom: 2px solid transparent; cursor: pointer; white-space: nowrap; background: none; border-top: 0; border-left: 0; border-right: 0; font-family: inherit; }
 .tab:hover { color: var(--text); }
 .tab.active { color: #fff; border-bottom-color: var(--orange); }
+/* Grouped tabs: Devices / People / Reports & logs open a small menu */
+.tabs { overflow: visible; }
+.tabgroup { position: relative; }
+.group-toggle .caret { font-size: 11px; margin-left: 2px; opacity: 0.8; }
+.tabgroup.has-active > .group-toggle, .tabgroup.open > .group-toggle { color: #fff; }
+.tabgroup.has-active > .group-toggle { border-bottom-color: var(--orange); }
+.tabmenu { display: none; position: absolute; top: calc(100% + 1px); left: 0; z-index: 30; min-width: 190px; padding: 6px; background: var(--surface-2); border: 1px solid var(--line); border-radius: 10px; box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5); }
+.tabgroup.open > .tabmenu { display: block; }
+.tabmenu .tab { display: block; width: 100%; text-align: left; border-bottom: 0; border-radius: 7px; padding: 10px 12px; }
+.tabmenu .tab:hover { background: var(--blue-soft); }
+.tabmenu .tab.active { background: var(--orange-soft); color: #fff; }
+@media (max-width: 720px) {
+  /* Small screens: no dropdowns, the tabs scroll sideways as one row */
+  .tabs { overflow-x: auto; }
+  .tabgroup, .tabmenu { display: contents; }
+  .group-toggle { display: none; }
+  .tabmenu .tab { display: inline-block; width: auto; padding: 13px 16px; border-bottom: 2px solid transparent; border-radius: 0; }
+  .tabmenu .tab.active { background: none; border-bottom-color: var(--orange); }
+  .tabmenu .tab:hover { background: none; }
+}
 
 .page { max-width: 1200px; margin: 0 auto; padding: 24px; }
 
