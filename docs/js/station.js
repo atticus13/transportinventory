@@ -3,7 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=8";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=10";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -133,13 +133,14 @@ function focusScan() {
 // ───────── lookups ─────────
 async function lookup(code) {
   if (!validId(code)) return { kind: "unknown" };
-  const a = await F.getDoc(F.doc(db, "assets", code));
+  // Ask for all three at once (device, employee ID, badge number) instead of one after another.
+  const [a, st, b] = await Promise.all([
+    F.getDoc(F.doc(db, "assets", code)),
+    F.getDoc(F.doc(db, "staff", code)),
+    F.getDocs(F.query(F.collection(db, "staff"), F.where("badgeId", "==", code), F.limit(1))),
+  ]);
   if (a.exists()) return { kind: "asset", rec: { id: a.id, ...a.data() } };
-  // Employee ID (the document id) …
-  const s = await F.getDoc(F.doc(db, "staff", code));
-  if (s.exists()) return { kind: "employee", method: "eid", rec: { id: s.id, ...s.data() } };
-  // … or the longer number on their badge.
-  const b = await F.getDocs(F.query(F.collection(db, "staff"), F.where("badgeId", "==", code), F.limit(1)));
+  if (st.exists()) return { kind: "employee", method: "eid", rec: { id: st.id, ...st.data() } };
   if (!b.empty) return { kind: "employee", method: "badge", rec: { id: b.docs[0].id, ...b.docs[0].data() } };
   return { kind: "unknown" };
 }
@@ -151,7 +152,9 @@ async function devicesHeldBy(employeeId) {
 
 // ───────── scan handling ─────────
 // Scans run one at a time, in order, so a fast double-scan can never interleave.
+let busy = 0;
 function enqueue(fn) {
+  busy++;
   chain = chain.then(fn).catch((e) => {
     if (e?.handled) return; // a specific error is already on screen
     console.error(e);
@@ -162,7 +165,7 @@ function enqueue(fn) {
         : "Couldn't reach the server. Check the internet and try again.",
       { title: "Not saved" }
     );
-  });
+  }).finally(() => { busy--; });
 }
 
 async function processCode(code, source) {
@@ -182,7 +185,8 @@ function processEmployee(rec, source, method = "eid") {
     return false;
   }
   const need = pinNeed(settings, rec);
-  pending = { id: rec.id, name: rec.name, source, method, rec, pin: need === "none" ? null : { need, tries: 0, first: null, verified: false, created: false } };
+  const heldP = S.ALLOW_MULTIPLE_PER_EMPLOYEE ? null : devicesHeldBy(rec.id).catch(() => null);   // fetched while they pick up the device
+  pending = { id: rec.id, name: rec.name, source, method, rec, heldP, pin: need === "none" ? null : { need, tries: 0, first: null, verified: false, created: false } };
   beep("ok");
   showPending();
   return true;
@@ -192,7 +196,7 @@ async function processAsset(asset, source) {
   if (pinActive()) return showError("Enter your PIN first, then scan the device.", { title: "PIN needed", keepPending: true });
   const employee = pending ? { id: pending.id, name: pending.name, method: pending.method } : null;
   // One device per person *of the same kind*: someone can hold a phone and a fob at once.
-  const held = employee && !S.ALLOW_MULTIPLE_PER_EMPLOYEE ? (await devicesHeldBy(employee.id)).filter((h) => (h.category || "") === (asset.category || "")) : [];
+  const held = employee && !S.ALLOW_MULTIPLE_PER_EMPLOYEE ? ((await pending?.heldP) || (await devicesHeldBy(employee.id))).filter((h) => (h.category || "") === (asset.category || "")) : [];
   const d = decide({ employee, asset, held, allowMultiple: S.ALLOW_MULTIPLE_PER_EMPLOYEE });
 
   if (d.action === "error") return showError(d.message, { title: titleFor(d.code, asset) });
@@ -584,11 +588,11 @@ if (cameraSupported() && mq("(pointer: coarse)")) {
     open = true;
     open = await openCameraScanner({
       title: "Scan with the camera",
-      mirror: () => ({ title: $("#stTitle").textContent, name: $("#stName").textContent, sub: $("#stSub").textContent }),
-      onCode: async (code) => {
+      mirror: () => (busy ? { title: "Checking…", sub: "One moment" } : { title: $("#stTitle").textContent, name: $("#stName").textContent, sub: $("#stSub").textContent }),
+      onCode: (code) => {
         scan.value = code; submitScan();
-        await new Promise((r) => setTimeout(r, 300));
-        return !pinActive();
+        chain.then(() => { if (pinActive()) open?.close?.(); });   // a PIN is needed: close the camera so the keypad shows
+        return true;
       },
       onClose: () => { open = null; },
       onManual: () => { if (!$("#manual").open) $("#manualBtn").click(); },

@@ -5,7 +5,7 @@ import { norm } from "./util.js";
 const ZXING = ["https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js", "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"];
 const FORMATS = ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "codabar", "qr_code"];
 const SAME_CODE_GAP_MS = 2500;
-export const CAMERA_VERSION = "8";
+export const CAMERA_VERSION = "10";
 
 /**
  * Pure. The camera sees the same barcode on every frame, so a code only counts again after it has been out of view for `gap` ms.
@@ -56,7 +56,7 @@ async function makeDecoder() {
 }
 
 const CSS = `
-.camscan{position:fixed;inset:0;z-index:9999;background:#05080f;display:flex;flex-direction:column;color:#eaf0fa;font-family:inherit}
+.camscan{position:fixed;inset:0;overflow:hidden;z-index:9999;background:#05080f;display:flex;flex-direction:column;color:#eaf0fa;font-family:inherit}
 .camscan header{display:flex;align-items:center;gap:10px;padding:12px 14px}
 .camscan header b{flex:1;font-size:17px}
 .camscan .cs-view{position:relative;flex:0 0 36vh;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
@@ -67,8 +67,8 @@ const CSS = `
 .camscan .cs-manual{margin-top:auto}
 .camscan .cs-ver{font-size:11px;color:#5c6b85;font-weight:400}
 .camscan .cs-status{font-size:15px;font-weight:600;min-height:20px;color:#9fb0c8}
-.camscan .cs-bubble{position:relative;overflow:hidden;border-radius:22px;background:linear-gradient(160deg,#ff8a1f,#f26a00);color:#1b0f02;min-height:104px;display:grid}
-.camscan .cs-step{grid-area:1/1;display:grid;place-content:center;gap:4px;padding:16px 18px;text-align:center}
+.camscan .cs-bubble{position:relative;min-height:112px;display:grid}
+.camscan .cs-step{grid-area:1/1;display:grid;place-content:center;gap:4px;padding:16px 18px;text-align:center;border-radius:22px;background:linear-gradient(160deg,#ff8a1f,#f26a00);color:#1b0f02;box-shadow:0 6px 18px rgba(0,0,0,.4)}
 .camscan .cs-step b{font-size:24px;line-height:1.15;font-weight:800}
 .camscan .cs-step i{font-style:normal;font-size:17px;font-weight:600}
 .camscan .cs-step span{font-size:14px;opacity:.85}
@@ -109,9 +109,9 @@ export async function openCameraScanner({ title = "Scan a barcode", onCode, keep
     bubble.appendChild(next);
     const old = stepEl;
     if (old && next.animate) {
-      const opts = { duration: 320, easing: "ease-in-out", fill: "forwards" };
-      old.animate([{ transform: "translateX(0)", opacity: 1 }, { transform: "translateX(-110%)", opacity: 0 }], opts).onfinish = () => old.remove();
-      next.animate([{ transform: "translateX(110%)", opacity: 0 }, { transform: "translateX(0)", opacity: 1 }], opts);
+      const opts = { duration: 380, easing: "cubic-bezier(.5,0,.2,1)", fill: "forwards" };
+      old.animate([{ transform: "translateX(0)", opacity: 1 }, { transform: "translateX(-120vw)", opacity: 1 }], opts).onfinish = () => old.remove();
+      next.animate([{ transform: "translateX(120vw)", opacity: 1 }, { transform: "translateX(0)", opacity: 1 }], opts);
     } else old?.remove();
     stepEl = next; stepKey = key;
   };
@@ -127,19 +127,33 @@ export async function openCameraScanner({ title = "Scan a barcode", onCode, keep
   el.querySelector("[data-m]")?.addEventListener("click", () => { close(); onManual?.(); });
 
   try {
-    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
+    stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
     if (stopped) { stream.getTracks().forEach((t) => t.stop()); return { close }; }
     video.srcObject = stream; await video.play();
     status.textContent = "Hold the barcode inside the box";
     showStep(mirror?.() || { title: "Point at a barcode" });
     const decode = await makeDecoder();
+    // Keep the camera focused and offer the torch where the phone supports them.
+    const track = stream.getVideoTracks()[0];
+    try { await track.applyConstraints({ advanced: [{ focusMode: "continuous" }] }); } catch { /* not supported */ }
+    if (track.getCapabilities?.().torch) {
+      const lamp = document.createElement("button");
+      lamp.type = "button"; lamp.textContent = "💡"; lamp.setAttribute("aria-label", "Light");
+      let on = false;
+      lamp.addEventListener("click", async () => { try { on = !on; await track.applyConstraints({ advanced: [{ torch: on }] }); lamp.style.background = on ? "#ff8a1f" : ""; } catch { /* ignore */ } });
+      el.querySelector("header").insertBefore(lamp, el.querySelector("[data-x]"));
+    }
+    // Only the middle band of the picture is decoded (that's where the box is), which is much faster than the whole frame.
     const canvas = document.createElement("canvas"), ctx = canvas.getContext("2d", { willReadFrequently: true });
     const tick = async () => {
       if (stopped) return;
       try {
         if (video.videoWidth) {
-          canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-          ctx.drawImage(video, 0, 0);
+          const vw = video.videoWidth, vh = video.videoHeight;
+          const sw = Math.round(vw * 0.9), sh = Math.round(vh * 0.5), sx = Math.round((vw - sw) / 2), sy = Math.round((vh - sh) / 2);
+          const scale = Math.min(1, 1280 / sw);
+          canvas.width = Math.round(sw * scale); canvas.height = Math.round(sh * scale);
+          ctx.drawImage(video, sx, sy, sw, sh, 0, 0, canvas.width, canvas.height);
           const raw = await decode(canvas);
           const code = norm(raw);
           const t = trackScan(code, last);
@@ -148,15 +162,15 @@ export async function openCameraScanner({ title = "Scan a barcode", onCode, keep
             box.classList.add("hit"); setTimeout(() => box.classList.remove("hit"), 600);
             navigator.vibrate?.(60);
             status.textContent = `✓ Scanned ${code}`;
-            const keep = (await onCode(code)) !== false;
-            if (!keepOpen || !keep) return close();
+            Promise.resolve(onCode(code)).then((keep) => { if (!keepOpen || keep === false) close(); }).catch((e) => console.error("onCode", e));
           }
         }
-        if (mirror) { const m = mirror(); if (m?.title) showStep(m); }
       } catch (e) { console.error("camera scan", e); }
-      timer = setTimeout(tick, 120);
+      timer = setTimeout(tick, 15);
     };
     tick();
+    // The step bubble follows the screen's state on its own timer, so it never waits on the barcode reader.
+    const follow = setInterval(() => { if (stopped) return clearInterval(follow); if (mirror) { const m = mirror(); if (m?.title) showStep(m); } }, 150);
   } catch (e) {
     const denied = e?.name === "NotAllowedError" || e?.name === "SecurityError";
     status.textContent = "";
