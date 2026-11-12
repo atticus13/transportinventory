@@ -361,17 +361,22 @@ function renderDashboard() {
     stat(overdue.length, `Out > ${S.OVERDUE_HOURS}h`, overdue.length ? "w" : "") +
     stat(cache.staff.filter((s) => s.active).length, "Active staff", "b");
 
-  const sorted = [...out].sort((a, b) => (toDate(a.checkedOutAt)?.getTime() || 0) - (toDate(b.checkedOutAt)?.getTime() || 0));
+  const q = $("#dashSearch").value.trim().toLowerCase();
+  const sorted = out
+    .filter((a) => !q || [a.currentHolderName, a.currentHolderId, a.id, a.category, a.model, a.phoneNumber, String(a.phoneNumber || "").replace(/\D/g, "")].join(" ").toLowerCase().includes(q))
+    .sort((a, b) => (toDate(a.checkedOutAt)?.getTime() || 0) - (toDate(b.checkedOutAt)?.getTime() || 0));
+  $("#dashOutCount").textContent = q ? `${sorted.length} of ${out.length} shown` : `${out.length} out`;
   $("#dashOut").innerHTML = sorted.length
     ? sorted.map((a) => {
         const h = hoursSince(a.checkedOutAt);
         return row([
           { h: `<span class="mono"><b>${esc(a.id)}</b></span>` }, { h: typeChip(a.category) }, esc(a.model || "—"),
+          { h: a.phoneNumber ? `<a class="mono" href="tel:${esc(String(a.phoneNumber).replace(/[^\d+]/g, ""))}">${esc(a.phoneNumber)}</a>` : "—" },
           `<b>${esc(a.currentHolderName)}</b> <span class="sub mono">${esc(a.currentHolderId)}</span>`,
           fmtDT(a.checkedOutAt), { h: `${fmtDur(h * 60)}${h > S.OVERDUE_HOURS ? ' <span class="chip warn">overdue</span>' : ""}` },
         ]);
       }).join("")
-    : emptyRow(6, "Nothing is checked out.");
+    : emptyRow(7, q ? "No checked-out device matches that search." : "Nothing is checked out.");
 
   clearTimeout(recentTimer);
   recentTimer = setTimeout(loadRecent, 250);
@@ -967,6 +972,7 @@ function renderStaff() {
   $("#staffAll").checked = sel.length > 0 && sel.every((s) => selectedStaff.has(s.id));
 }
 
+$("#dashSearch").addEventListener("input", renderDashboard);
 ["#staffSearch", "#staffRemoved"].forEach((s) => $(s).addEventListener("input", renderStaff));
 $("#staffAll").addEventListener("change", (e) => {
   shownStaff().filter((s) => s.active).forEach((s) => (e.target.checked ? selectedStaff.add(s.id) : selectedStaff.delete(s.id)));
