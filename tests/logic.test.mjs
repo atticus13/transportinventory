@@ -5,7 +5,6 @@ import { summarize, normalizeLog, actionLabel, activityRows } from "../docs/js/r
 import { parseImport, parseAdminImport, TEMPLATES, findDuplicates, normDetail } from "../docs/js/import-logic.js";
 import { parseCSV, toCSV, norm, validId, rangeFromInputs, fmtDur, derivePrefix, nextIdFor, slugify } from "../docs/js/util.js";
 import { normSettings, pinNeed, validPin, hashPin, checkPin, newSalt } from "../docs/js/pin-logic.js";
-import { parseShiftTimes, lastShiftChange, recentShiftChanges, carriedOver } from "../docs/js/shift-logic.js";
 import { expectedIn, classifyScan, summarizeCount } from "../docs/js/inventory-logic.js";
 import { removedMessage, reasonLabel, RETIRE_REASONS } from "../docs/js/scan-logic.js";
 import { idMethodLabel } from "../docs/js/report-logic.js";
@@ -284,30 +283,6 @@ test("hashPin: salted, deterministic, never contains the PIN; checkPin accepts o
   assert.ok(!(await checkPin("12", staff)));
 });
 
-// ───────── shift sweep ─────────
-test("parseShiftTimes validates, pads, sorts, dedupes", () => {
-  assert.deepEqual(parseShiftTimes("15:00, 7:00 23:00;15:00").times, ["07:00", "15:00", "23:00"]);
-  assert.match(parseShiftTimes("25:00").error, /isn't a time/);
-  assert.match(parseShiftTimes("7pm").error, /isn't a time/);
-  assert.match(parseShiftTimes("  ").error, /at least one/);
-});
-test("lastShiftChange / recentShiftChanges look back across midnight", () => {
-  const times = ["07:00", "15:00", "23:00"];
-  const at = (y, m, d, h, mi = 0) => new Date(y, m - 1, d, h, mi);
-  assert.equal(+lastShiftChange(times, at(2026, 11, 10, 16, 30)), +at(2026, 11, 10, 15));
-  assert.equal(+lastShiftChange(times, at(2026, 11, 10, 6, 0)), +at(2026, 11, 9, 23));
-  assert.equal(+lastShiftChange(times, at(2026, 11, 10, 7, 0)), +at(2026, 11, 10, 7));
-  const recent = recentShiftChanges(times, at(2026, 11, 10, 16, 0));
-  assert.deepEqual(recent.map((d) => d.getHours()), [15, 7, 23]); // newest first, within 24h
-});
-test("carriedOver: checked out before the boundary", () => {
-  const b = new Date(2026, 10, 10, 15, 0);
-  assert.ok(carriedOver(new Date(2026, 10, 10, 13, 0), b));
-  assert.ok(!carriedOver(new Date(2026, 10, 10, 15, 5), b));
-  assert.ok(!carriedOver(null, b));
-  assert.ok(!carriedOver(new Date(), null));
-});
-
 // ───────── inventory count ─────────
 const inv = [
   { id: "PH-001", active: true, status: "in", category: "Phone" },
@@ -566,4 +541,14 @@ test("stale staff: only look up history for people old enough to be stale", () =
   assert.equal(worthChecking({ active: true }, NOW), true);
   assert.equal(worthChecking({ active: false, createdAt: daysAgo(100) }, NOW), false);
   assert.equal(lastSeenOf({ createdAt: daysAgo(100) }, daysAgo(20)).getTime(), daysAgo(20).getTime());
+});
+
+// ───────── camera scanning ─────────
+import { acceptScan } from "../docs/js/camera-scan.js";
+test("camera: the same barcode on consecutive frames counts once, a different one or a later repeat counts again", () => {
+  assert.equal(acceptScan("PH-001", null, 1000), true);
+  assert.equal(acceptScan("PH-001", { code: "PH-001", at: 1000 }, 1500), false);
+  assert.equal(acceptScan("PH-002", { code: "PH-001", at: 1000 }, 1500), true);
+  assert.equal(acceptScan("PH-001", { code: "PH-001", at: 1000 }, 4000), true);
+  assert.equal(acceptScan("  ", null, 1000), false);
 });

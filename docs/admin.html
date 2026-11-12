@@ -88,7 +88,6 @@
         <div class="tabmenu">
           <button class="tab" data-tab="assets">Assets</button>
           <button class="tab" data-tab="inventory">Inventory count</button>
-          <button class="tab" data-tab="sweep">Shift sweep</button>
         </div>
       </div>
       <div class="tabgroup" data-group="people">
@@ -114,7 +113,7 @@
       <section id="tab-dashboard" class="tabpane">
         <div class="stats" id="dashStats"></div>
         <div class="card">
-          <div class="card-head"><h2>Checked out right now</h2><div class="spacer"></div><button class="btn sm" id="goSweep">Run shift sweep →</button></div>
+          <div class="card-head"><h2>Checked out right now</h2></div>
           <div class="table-wrap"><table>
             <thead><tr><th>Asset</th><th>Type</th><th>Model</th><th>With</th><th>Since</th><th>Duration</th></tr></thead>
             <tbody id="dashOut"></tbody>
@@ -239,7 +238,7 @@
         <div class="card hidden" id="invRun">
           <div class="card-head"><h2 id="invTitle">Counting…</h2><div class="spacer"></div>
             <button class="btn" id="invCancel">Cancel</button><button class="btn primary" id="invFinish">Finish &amp; save count</button></div>
-          <input id="invScan" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Scan a device (or type its ID and press Enter)" style="font-family:var(--mono);font-size:20px;padding:14px 16px" />
+          <div style="display:flex;gap:8px"><button class="btn" id="invCam" type="button" hidden>📷 Camera</button><input id="invScan" type="text"  autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Scan a device (or type its ID and press Enter)" style="flex:1;min-width:0;font-family:var(--mono);font-size:20px;padding:14px 16px" /></div>
           <div id="invMsg" class="muted" style="margin-top:8px;min-height:22px"></div>
           <div class="progress"><i id="invBar"></i></div>
           <div id="invLists"></div>
@@ -249,24 +248,6 @@
           <div class="table-wrap"><table>
             <thead><tr><th>When</th><th>Counted by</th><th>Scope</th><th>Expected</th><th>Found</th><th>Missing</th><th>Other</th><th></th></tr></thead>
             <tbody id="invHistory"></tbody>
-          </table></div>
-        </div>
-      </section>
-
-      <!-- Shift sweep -->
-      <section id="tab-sweep" class="tabpane hidden">
-        <div class="card">
-          <div class="card-head"><h2>End-of-shift sweep</h2><span class="muted">What's still out at shift change. Chase anything that should have been returned, then record the sweep.</span></div>
-          <div class="toolbar no-print">
-            <label class="f" style="flex-direction:row;align-items:center;gap:8px">Shift change<select id="sweepAt"></select></label>
-            <div class="spacer"></div>
-            <button class="btn" id="sweepPrint">Print list</button>
-            <button class="btn primary" id="sweepRecord">Record sweep</button>
-          </div>
-          <p id="sweepSummary" class="muted" style="margin-top:0"></p>
-          <div class="table-wrap"><table>
-            <thead><tr><th>Asset</th><th>Type</th><th>With</th><th>Out since</th><th>Out for</th><th class="no-print"></th></tr></thead>
-            <tbody id="sweepBody"></tbody>
           </table></div>
         </div>
       </section>
@@ -349,9 +330,6 @@
           <label class="radio"><input type="radio" name="pinMode" value="selected" /><span><b>Selected people</b><small>Only people you mark on the Staff tab ("Require PIN for selected"), for example supervisors or anyone with a history of shared badges.</small></span></label>
           <label class="radio"><input type="radio" name="pinMode" value="all" /><span><b>Everyone</b><small>Every person is asked for a PIN after scanning their badge.</small></span></label>
           <p class="muted" style="font-size:13.5px">People choose their own 4-6 digit PIN the first time it's asked. You never see it. If someone forgets, use <b>PIN…</b> on the Staff tab to reset it. This keeps coworkers from casually borrowing a badge. It is not strong security: the scrambled PIN is stored on the staff record. <span id="pinStats"></span></p>
-          <h3 class="sec">Shift changes</h3>
-          <label class="f" style="max-width:420px">Shift-change times (24-hour, separated by commas)<input id="shiftTimes" placeholder="07:00, 15:00, 23:00" /></label>
-          <p class="muted" style="font-size:13.5px">Used by the Shift sweep tab. Change them to match your real shifts.</p>
           <div class="err-text" id="settingsErr"></div>
           <div class="row"><div class="spacer"></div><button class="btn primary" type="submit">Save settings</button></div>
         </form>

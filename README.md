@@ -95,16 +95,13 @@ At the station press **Report a damaged device**: (1) scan the device, (2) type 
 ### Inventory count
 **Inventory** tab → choose scope (all or one type) → scan every device on the shelf → Finish. You get Found / Missing / Out with staff / Out of service / Unknown. Missing devices can be marked lost or checked in right there. Counts are saved to history.
 
-### End-of-shift sweep
-**Shift sweep** tab lists devices still out since before the last shift change, to print or follow up on. Shift change times are in **Settings** (default 07:00, 15:00, 23:00; **these are a guess, please change them**).
-
 ### Kiosk mode
 Station → **Kiosk** button: fullscreen, screen kept awake, remembered on that computer. Exit: click the clock 5 times or Ctrl+Shift+K. `?kiosk=1` / `?kiosk=0` in the address forces it on/off.
 
 ---
 
 ## Admin portal
-The menu bar has **Dashboard**, **Alerts**, then three drop-down groups: **Devices** (Assets, Inventory count, Shift sweep), **People** (Staff, Admins) and **Reports & logs** (Reports, Changelog), then **Settings**. On a phone the groups flatten into one scrolling row.
+The menu bar has **Dashboard**, **Alerts**, then three drop-down groups: **Devices** (Assets, Inventory count), **People** (Staff, Admins) and **Reports & logs** (Reports, Changelog), then **Settings**. On a phone the groups flatten into one scrolling row.
 Bulk label printing with saved templates is in Assets/Staff (tick rows → **Print N labels…**). CSV import for staff (`employeeId,name`) and assets (`assetType,model,imei,serial,phoneNumber`). "Remove" never erases anything; history is kept.
 
 ## Admin portal notes
@@ -170,3 +167,10 @@ The Alerts tab has an **Inactive staff** list: active staff with no log activity
 
 ## Scan station layout
 Phones/tablets (touch): larger buttons, numeric keyboard on the scan field with an ABC/123 toggle, recent activity behind a button. Large mouse-driven screens: recent activity always shown at the bottom. On phones the scan box is full width and the clock/Kiosk button are hidden.
+
+
+## Camera scanning
+On phones and tablets the scan station has a **📷 Camera** button (and the admin Inventory count too). It opens the camera full screen, reads Code 128 (the label barcode) and other common formats, and stays open between scans (badge, then device); it closes itself when a PIN is needed. Uses the browser's built-in barcode reader where it exists, otherwise loads the open-source ZXing library from jsdelivr/unpkg. Needs HTTPS (GitHub Pages is) and camera permission for the site. Tested in Chromium with a simulated camera; not yet on real phones.
+
+## Rules tests (emulator)
+See the header of `tests/rules.test.mjs`. Needs Node, Java 11+ and `npm i --no-save firebase-tools @firebase/rules-unit-testing firebase`, then `npx firebase emulators:exec --only firestore --project demo-phone "node --test tests/rules.test.mjs"`.

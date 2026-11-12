@@ -3,6 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -586,6 +587,28 @@ for (const b of $$("[data-kbswap]")) {
     input.inputMode = toText ? "text" : "numeric";
     b.textContent = toText ? "123" : "ABC";
     input.focus();
+  });
+}
+
+// Camera scanning (phones/tablets, or any device with a camera). The camera stays open between scans (badge, then device)
+// and mirrors what the station is asking for; it closes by itself when a PIN is needed so the keypad is visible.
+if (cameraSupported() && mq("(pointer: coarse)")) {
+  const cam = $("#camBtn");
+  cam.hidden = false;
+  let open = null;
+  cam.addEventListener("click", async () => {
+    if (open) return;
+    open = true;
+    open = await openCameraScanner({
+      title: "Scan with the camera",
+      mirror: () => ({ title: $("#stName").textContent ? `${$("#stTitle").textContent}: ${$("#stName").textContent}` : $("#stTitle").textContent, sub: $("#stSub").textContent }),
+      onCode: async (code) => {
+        scan.value = code; submitScan();
+        await new Promise((r) => setTimeout(r, 300));
+        return !pinActive();
+      },
+      onClose: () => { open = null; },
+    }).catch((e) => { open = null; showError(e.message, { title: "Camera" }); });
   });
 }
 

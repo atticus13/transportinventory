@@ -355,7 +355,7 @@ test("station can't set a PIN on a removed person", async () => {
 
 test("settings: stations read, only admins write (audited)", async () => {
   const a1 = dbOf("A1");
-  await assertSucceeds(auditedSet(a1, "settings", "settings", "app", { pinMode: "selected", shiftTimes: ["07:00"] }).commit());
+  await assertSucceeds(auditedSet(a1, "settings", "settings", "app", { pinMode: "selected" }).commit());
   await assertFails(setDoc(doc(a1, "settings", "other"), { pinMode: "all" })); // no footprint
   await assertSucceeds(getDoc(doc(dbOf("S1"), "settings", "app")));
   await assertFails(setDoc(doc(dbOf("S1"), "settings", "app"), { pinMode: "off" }));

@@ -6,11 +6,9 @@
 // who already has a station login.
 
 export const PIN_MODES = ["off", "selected", "all"];
-export const DEFAULT_SHIFT_TIMES = ["07:00", "15:00", "23:00"];
 
 export const normSettings = (raw) => ({
   pinMode: PIN_MODES.includes(raw?.pinMode) ? raw.pinMode : "off",
-  shiftTimes: Array.isArray(raw?.shiftTimes) && raw.shiftTimes.length ? raw.shiftTimes : DEFAULT_SHIFT_TIMES,
 });
 
 export const validPin = (p) => /^\d{4,6}$/.test(String(p ?? ""));

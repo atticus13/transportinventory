@@ -7,8 +7,8 @@ import { readSpreadsheet, downloadTemplate } from "./sheet.js";
 import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
-import { parseShiftTimes, recentShiftChanges, carriedOver } from "./shift-logic.js";
 import { classifyScan, summarizeCount } from "./inventory-logic.js";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js";
 import { staleStaff, worthChecking, snoozeUntil, STALE_DAYS, SNOOZE_DAYS } from "./stale-logic.js";
 
 const REPORT_MAX = 5000;
@@ -196,7 +196,7 @@ $("#loginForm").addEventListener("submit", async (e) => {
 $("#signOut").addEventListener("click", () => { sessionStorage.removeItem("audit-login-" + me?.uid); A.signOut(auth); });
 
 // ═════════════════════════ tabs, bell ═════════════════════════
-const TABS = ["dashboard", "alerts", "assets", "staff", "inventory", "sweep", "reports", "admins", "changelog", "settings"];
+const TABS = ["dashboard", "alerts", "assets", "staff", "inventory", "reports", "admins", "changelog", "settings"];
 function showTab(name) {
   if (!TABS.includes(name)) name = "dashboard";
   currentTab = name;
@@ -279,7 +279,7 @@ function updateBell() {
 
 function renderCurrent() {
   if (!me) return;
-  ({ dashboard: renderDashboard, alerts: renderAlerts, assets: renderAssets, staff: renderStaff, inventory: renderInventory, sweep: renderSweep, reports: fillReportControls, admins: renderAdmins, changelog: fillAdminSelect, settings: renderSettings }[currentTab] || (() => {}))();
+  ({ dashboard: renderDashboard, alerts: renderAlerts, assets: renderAssets, staff: renderStaff, inventory: renderInventory, reports: fillReportControls, admins: renderAdmins, changelog: fillAdminSelect, settings: renderSettings }[currentTab] || (() => {}))();
 }
 
 const chipFor = {
@@ -1770,6 +1770,18 @@ $("#invScan").addEventListener("keydown", (e) => {
   drawInventory();
 });
 
+if (cameraSupported() && window.matchMedia?.("(pointer: coarse)")?.matches) {
+  $("#invCam").hidden = false;
+  $("#invCam").addEventListener("click", () => {
+    if (!inv) return;
+    openCameraScanner({
+      title: "Scan devices to count",
+      mirror: () => ({ title: "", sub: $("#invMsg").textContent }),
+      onCode: (code) => { $("#invScan").value = code; $("#invScan").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true })); return true; },
+    }).catch((e) => toast(e.message, "err", 6000));
+  });
+}
+
 $("#invLists").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
   if (!b) return;
@@ -1836,74 +1848,7 @@ $("#invHistory").addEventListener("click", (e) => {
   if (b) $(`#invHistory tr[data-d="${b.closest("tr").dataset.i}"]`).classList.toggle("hidden");
 });
 
-// ═════════════════════════ end-of-shift sweep ═════════════════════════
 const settingsDoc = () => normSettings(cache.settings.find((x) => x.id === "app"));
-const hhmm = (d) => d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false });
-const dayWord = (d) => (d.toDateString() === new Date().toDateString() ? "Today" : "Yesterday");
-
-function sweepBoundary() {
-  const v = $("#sweepAt").value;
-  return v && v !== "now" ? new Date(v) : null;
-}
-
-function renderSweep() {
-  const sel = $("#sweepAt");
-  const keep = sel.value;
-  const changes = recentShiftChanges(settingsDoc().shiftTimes);
-  sel.innerHTML = changes.map((d) => `<option value="${d.toISOString()}">${dayWord(d)} ${hhmm(d)} shift change</option>`).join("") + '<option value="now">Right now (no shift boundary)</option>';
-  if (keep && [...sel.options].some((o) => o.value === keep)) sel.value = keep;
-  const boundary = sweepBoundary();
-
-  const out = cache.assets.filter((a) => a.active && a.status === "out")
-    .sort((a, b) => (toDate(a.checkedOutAt)?.getTime() || 0) - (toDate(b.checkedOutAt)?.getTime() || 0));
-  const carried = out.filter((a) => carriedOver(toDate(a.checkedOutAt), boundary));
-  $("#sweepSummary").textContent = out.length
-    ? boundary
-      ? `${out.length} device${out.length === 1 ? " is" : "s are"} still out. ${carried.length} ${carried.length === 1 ? "was" : "were"} checked out before the ${hhmm(boundary)} shift change and carried over.`
-      : `${out.length} device${out.length === 1 ? " is" : "s are"} still out.`
-    : "Everything is back. Nothing to chase.";
-  $("#sweepBody").innerHTML = out.length
-    ? out.map((a) => {
-        const co = carriedOver(toDate(a.checkedOutAt), boundary);
-        return `<tr data-id="${esc(a.id)}" class="${co ? "" : ""}">
-          <td><b class="mono">${esc(a.id)}</b></td><td>${typeChip(a.category)}<div class="sub">${esc(a.model || "")}</div></td>
-          <td><b>${esc(a.currentHolderName)}</b> <span class="sub mono">${esc(a.currentHolderId)}</span></td>
-          <td>${fmtDT(a.checkedOutAt)}${co ? ' <span class="chip warn">carried over</span>' : ""}</td>
-          <td>${fmtDur(hoursSince(a.checkedOutAt) * 60)}</td>
-          <td class="actions no-print"><button class="btn sm" data-act="return">Force return</button> <button class="btn sm danger" data-act="lost">Mark lost…</button></td></tr>`;
-      }).join("")
-    : emptyRow(6, "Nothing is checked out.");
-}
-
-$("#sweepAt").addEventListener("change", renderSweep);
-$("#sweepPrint").addEventListener("click", () => window.print());
-$("#goSweep").addEventListener("click", () => showTab("sweep"));
-$("#sweepBody").addEventListener("click", async (e) => {
-  const b = e.target.closest("[data-act]");
-  if (!b) return;
-  const a = cache.assets.find((x) => x.id === b.closest("tr").dataset.id);
-  try {
-    if (b.dataset.act === "return") await forceReturn(a);
-    if (b.dataset.act === "lost") outOfServiceDialog(a, "lost");
-  } catch (err) { toast(explain(err), "err", 6000); }
-});
-
-$("#sweepRecord").addEventListener("click", async () => {
-  const boundary = sweepBoundary();
-  const out = cache.assets.filter((a) => a.active && a.status === "out");
-  const carried = out.filter((a) => carriedOver(toDate(a.checkedOutAt), boundary));
-  const when = boundary ? `${hhmm(boundary)} shift change` : "now";
-  try {
-    await commit([{
-      audit: {
-        action: "shift.sweep", targetType: "sweep", targetId: new Date().toISOString(),
-        summary: `Shift sweep (${when}): ${out.length} still out${out.length ? " (" + out.map((a) => `${a.id} with ${a.currentHolderName}`).join(", ") + ")" : ""}${carried.length ? `; ${carried.length} carried over` : ""}`,
-        before: null, after: { stillOut: out.map((a) => a.id), carriedOver: carried.map((a) => a.id) },
-      },
-    }]);
-    toast("Sweep recorded in the changelog", "ok");
-  } catch (e) { toast(explain(e), "err", 6000); }
-});
 
 // ═════════════════════════ settings ═════════════════════════
 function renderSettings() {
@@ -1912,25 +1857,22 @@ function renderSettings() {
   $("#pinStats").textContent = `${active.filter((x) => x.pinHash).length} of ${active.length} active people have set a PIN; ${active.filter((x) => x.pinRequired).length} are marked as required.`;
   if (settingsDirty) return;
   for (const r of $$('input[name="pinMode"]')) r.checked = r.value === cur.pinMode;
-  $("#shiftTimes").value = cur.shiftTimes.join(", ");
   $("#settingsNote").textContent = cache.settings.find((x) => x.id === "app") ? "" : "Using defaults. Nothing saved yet.";
 }
 $("#settingsForm").addEventListener("input", () => (settingsDirty = true));
 $("#settingsForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#settingsErr").textContent = "";
-  const parsed = parseShiftTimes($("#shiftTimes").value);
-  if (parsed.error) return ($("#settingsErr").textContent = parsed.error);
   const pinMode = $('input[name="pinMode"]:checked')?.value || "off";
   const before = settingsDoc();
   try {
     await commit([{
       ref: F.doc(db, "settings", "app"), mode: "set",
-      data: { pinMode, shiftTimes: parsed.times, updatedAt: now() },
+      data: { pinMode, updatedAt: now() },
       audit: {
         action: "settings.update", targetType: "settings", targetId: "app",
-        summary: `Settings: PIN mode ${pinMode}, shift changes ${parsed.times.join(", ")}`,
-        before, after: { pinMode, shiftTimes: parsed.times },
+        summary: `Settings: PIN mode ${pinMode}`,
+        before, after: { pinMode },
       },
     }]);
     settingsDirty = false;
