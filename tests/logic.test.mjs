@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { decide, heldMinutes } from "../docs/js/scan-logic.js";
 import { summarize, normalizeLog, actionLabel, activityRows } from "../docs/js/report-logic.js";
 import { parseImport, parseAdminImport, TEMPLATES, findDuplicates, normDetail } from "../docs/js/import-logic.js";
-import { parseCSV, toCSV, norm, validId, rangeFromInputs, fmtDur, derivePrefix, nextIdFor, slugify } from "../docs/js/util.js";
+import { parseCSV, toCSV, norm, validId, rangeFromInputs, fmtDur, derivePrefix, nextIdFor, slugify, badgeFor, eidFromBadge } from "../docs/js/util.js";
 import { normSettings, pinNeed, validPin, hashPin, checkPin, newSalt } from "../docs/js/pin-logic.js";
 import { expectedIn, classifyScan, summarizeCount } from "../docs/js/inventory-logic.js";
 import { removedMessage, reasonLabel, RETIRE_REASONS } from "../docs/js/scan-logic.js";
@@ -155,7 +155,7 @@ test("staff import: valid rows, dupes, missing pieces", () => {
 });
 test("staff import: first/last name columns", () => {
   const { records } = parseImport("staff", parseCSV("EID,First Name,Last Name\n77,Ann,Lee"));
-  assert.deepEqual(records, [{ id: "77", name: "Ann Lee", badgeId: "" }]);
+  assert.deepEqual(records, [{ id: "77", name: "Ann Lee", badgeId: "00007701" }]);
 });
 test("staff import: missing id column is fatal", () => {
   assert.ok(parseImport("staff", parseCSV("name\nJane")).fatal);
@@ -318,30 +318,23 @@ test("summarizeCount: missing excludes devices that are out with staff; duplicat
 });
 
 // ───────── badge numbers vs employee IDs ─────────
-test("staff import: badge column is read as the badge number, not the employee ID", () => {
-  const { records, errors } = parseImport("staff", parseCSV("Employee ID,Badge Number,Name\n10234,1002340077,Jane Doe\n10235,,Bob Ray"));
-  assert.deepEqual(records, [{ id: "10234", name: "Jane Doe", badgeId: "1002340077" }, { id: "10235", name: "Bob Ray", badgeId: "" }]);
+test("badge numbers: always 0000 + employee ID + 01, and the pattern can be turned back into the employee ID", () => {
+  assert.equal(badgeFor("1001"), "0000100101");
+  assert.equal(eidFromBadge("0000100101"), "1001");
+  assert.equal(eidFromBadge("PH-001"), null);
+  assert.equal(eidFromBadge("1001"), null);
+});
+test("staff import: no badge column; every new person gets their badge number generated; a badge column in the file is ignored", () => {
+  const { records, errors } = parseImport("staff", parseCSV("Employee ID,Badge Number,Name\n10234,999,Jane Doe\n10235,,Bob Ray"));
+  assert.deepEqual(records, [{ id: "10234", name: "Jane Doe", badgeId: "00001023401" }, { id: "10235", name: "Bob Ray", badgeId: "00001023501" }]);
   assert.equal(errors.length, 0);
 });
-test("staff import: existing people get their badge number filled in", () => {
-  const existingStaff = new Map([["10234", { name: "Jane Doe", badgeId: "" }], ["10235", { name: "Bob Ray", badgeId: "55" }]]);
-  const existingIds = new Set(["10234", "10235", "55", "PH-001"]);
-  const r = parseImport("staff", parseCSV("employeeId,badgeId\n10234,1002340077\n10235,55\n10236,9"), { existingIds, existingStaff });
-  assert.deepEqual(r.updates, [{ id: "10234", name: "Jane Doe", badgeId: "1002340077", previous: "" }]);
-  assert.deepEqual(r.records, []);
-  assert.equal(r.errors.length, 2); // Bob already has 55; 10236 has no name and doesn't exist
-});
-test("staff import: a badge number can't clash with any other ID", () => {
-  const existingStaff = new Map([["10234", { name: "Jane", badgeId: "" }]]);
-  const existingIds = new Set(["10234", "PH-001", "777"]);
-  const r = parseImport("staff", parseCSV("employeeId,badgeId,name\n10234,777,Jane\n20001,PH-001,Ann\n20002,5,Bo\n20003,5,Cy\n20004,20004,Di"), { existingIds, existingStaff });
-  assert.deepEqual(r.records.map((x) => x.id), ["20002"]);
-  assert.equal(r.updates.length, 0);
-  assert.equal(r.errors.length, 4);
-});
-test("staff import: a file with only employeeId + badgeId is allowed (updates only)", () => {
-  assert.ok(!parseImport("staff", parseCSV("employeeId,badgeId\n1,2")).fatal);
-  assert.ok(parseImport("staff", parseCSV("employeeId\n1")).fatal);
+test("staff import: existing people are skipped; a generated badge number can't clash with another ID", () => {
+  const existingStaff = new Map([["10234", { name: "Jane Doe", badgeId: "00001023401" }]]);
+  const existingIds = new Set(["10234", "00001023401", "PH-001", "00002000201"]);
+  const r = parseImport("staff", parseCSV("employeeId,name\n10234,Jane\n20002,Bo\n20003,Cy"), { existingIds, existingStaff });
+  assert.deepEqual(r.records.map((x) => x.id), ["20003"]);
+  assert.equal(r.errors.length, 2);   // 10234 exists; 20002's badge number is taken
 });
 test("idMethodLabel: badge, employee ID, or device-only returns", () => {
   assert.equal(idMethodLabel({ idMethod: "badge", type: "out" }), "Badge");
@@ -376,23 +369,23 @@ test("nextIdFor with no padding", () => {
 
 // ───────── admin import ─────────
 test("admin import: emails, names, roles, duplicates, and staff IDs for admins", () => {
-  const rows = parseCSV("Email,Name,Role,EmployeeID,Badge\njordan@example.org,Jordan Lee,admin,5001,50010077\ndesk@example.org,Dispatch desk,Station,,\nJORDAN@example.org,Dup,admin,5002,\nbad,Bad,admin,5003,\nx@example.org,,admin,5004,\nold@example.org,Old,admin,5005,\ny@example.org,Y,wizard,5006,\nz@example.org,Zed,,5007,");
+  const rows = parseCSV("Email,Name,Role,EmployeeID,Badge\njordan@example.org,Jordan Lee,admin,5001,ignored\ndesk@example.org,Dispatch desk,Station,,\nJORDAN@example.org,Dup,admin,5002,\nbad,Bad,admin,5003,\nx@example.org,,admin,5004,\nold@example.org,Old,admin,5005,\ny@example.org,Y,wizard,5006,\nz@example.org,Zed,,5007,");
   const { records, errors } = parseAdminImport(rows, { existingEmails: new Set(["old@example.org"]) });
   assert.deepEqual(records, [
-    { email: "jordan@example.org", name: "Jordan Lee", role: "admin", employeeId: "5001", badgeId: "50010077", newStaff: true },
+    { email: "jordan@example.org", name: "Jordan Lee", role: "admin", employeeId: "5001", badgeId: "0000500101", newStaff: true },
     { email: "desk@example.org", name: "Dispatch desk", role: "station", employeeId: "", badgeId: "", newStaff: false },
-    { email: "z@example.org", name: "Zed", role: "admin", employeeId: "5007", badgeId: "", newStaff: true },
+    { email: "z@example.org", name: "Zed", role: "admin", employeeId: "5007", badgeId: "0000500701", newStaff: true },
   ]);
   assert.equal(errors.length, 5);
   assert.ok(parseAdminImport(parseCSV("name\nJane")).fatal);
 });
 
 test("admin import: an admin needs an employee ID, and it can't clash", () => {
-  const rows = parseCSV("email,name,employeeId,badgeId\na@x.org,A,,\nb@x.org,B,1001,\nc@x.org,C,1002,\nd@x.org,D,1002,\ne@x.org,E,R1,\nf@x.org,F,1003,10030055\ng@x.org,G,1004,10030055\nh@x.org,H,1005,R1");
+  const rows = parseCSV("email,name,employeeId\na@x.org,A,\nb@x.org,B,1001\nc@x.org,C,1002\nd@x.org,D,1002\ne@x.org,E,R1\nf@x.org,F,1003\ng@x.org,G,1004");
   const { records, errors } = parseAdminImport(rows, { existingIds: new Set(["R1", "1001", "1002"]), existingStaff: new Set(["1001", "1002"]), linkedStaff: new Set(["1002"]) });
   // b links to an existing staff member (no new staff record); c belongs to another admin; d repeats it; e is a device id
-  assert.deepEqual(records.map((r) => [r.email, r.employeeId, r.newStaff]), [["b@x.org", "1001", false], ["f@x.org", "1003", true]]);
-  assert.equal(errors.length, 6); // a, c, d, e, g (badge reused in file), h (badge is a device id)
+  assert.deepEqual(records.map((r) => [r.email, r.employeeId, r.newStaff]), [["b@x.org", "1001", false], ["f@x.org", "1003", true], ["g@x.org", "1004", true]]);
+  assert.equal(errors.length, 4); // a (no ID), c (belongs to another admin), d (repeat), e (device id)
 });
 
 // ───────── downloadable templates ─────────
@@ -403,12 +396,12 @@ test("every template's header row is understood by its importer", () => {
   }
   assert.ok(!parseAdminImport([TEMPLATES.admin.headers]).fatal);
   // a filled-in row round-trips through each template
-  assert.equal(parseImport("staff", [TEMPLATES.staff.headers, ["1", "99", "Jane"]]).records[0].badgeId, "99");
+  assert.equal(parseImport("staff", [TEMPLATES.staff.headers, ["1", "Jane"]]).records[0].badgeId, "0000101");
   const rover = { knownTypes: [{ name: "Rover phone", prefix: "R", pad: 3 }] };
   assert.equal(parseImport("asset", [[...TEMPLATES.asset.headers, "assetId"], ["Rover phone", "", "", "", "", "R1"]], rover).records[0].id, "R1");
   assert.equal(parseImport("asset", [TEMPLATES.asset.headers, ["Rover phone", "", "", "", ""]], rover).records[0].id, "R001");
-  assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "station", "", ""]]).records[0].role, "station");
-  assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "admin", "77", ""]]).records[0].employeeId, "77");
+  assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "station", ""]]).records[0].role, "station");
+  assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "admin", "77"]]).records[0].employeeId, "77");
   for (const t of Object.values(TEMPLATES)) assert.ok(t.notes.length > 2 && t.file);
 });
 

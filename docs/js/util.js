@@ -151,3 +151,10 @@ export function nextIdFor(prefix, pad, ids) {
   for (const id of ids) { const m = re.exec(id); if (m) max = Math.max(max, parseInt(m[1], 10)); }
   return prefix + String(max + 1).padStart(pad, "0");
 }
+
+
+// Every staff badge barcode reads 0000 + employee ID + 01 (for example employee 1001 → 0000100101),
+// so the badge number is never typed in: it is worked out from the employee ID.
+export const badgeFor = (employeeId) => `0000${employeeId}01`;
+/** The employee ID a badge number stands for, or null if the code isn't in the badge pattern. */
+export const eidFromBadge = (code) => { const m = /^0000(.+)01$/.exec(String(code ?? "")); return m ? m[1] : null; };

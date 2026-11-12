@@ -1,6 +1,6 @@
 import { auth, db, A, F, appMod, firebaseConfig, configured, friendlyAuthError } from "./fb.js";
 import { SETTINGS as S } from "./firebase-config.js";
-import { $, $$, esc, norm, validId, toDate, fmtDT, fmtFull, fmtDur, ymd, rangeFromInputs, toCSV, downloadFile, parseCSV, toast, slugify, derivePrefix, nextIdFor, beep } from "./util.js";
+import { $, $$, esc, norm, validId, toDate, fmtDT, fmtFull, fmtDur, ymd, rangeFromInputs, toCSV, downloadFile, parseCSV, toast, slugify, derivePrefix, nextIdFor, beep, badgeFor } from "./util.js";
 import { normalizeLog, summarize, ACTIVITY_HEADERS, activityRows, idMethodLabel } from "./report-logic.js";
 import { parseImport, parseAdminImport, findDuplicates } from "./import-logic.js";
 import { readSpreadsheet, downloadTemplate } from "./sheet.js";
@@ -8,7 +8,7 @@ import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
 import { classifyScan, summarizeCount } from "./inventory-logic.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=15";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=16";
 import { staleStaff, worthChecking, snoozeUntil, STALE_DAYS, SNOOZE_DAYS } from "./stale-logic.js";
 
 const REPORT_MAX = 5000;
@@ -207,6 +207,34 @@ $("#forgotBtn").addEventListener("click", async () => {
     if (c.includes("user-not-found")) { out.style.color = "var(--ok)"; out.textContent = `If ${email} has an admin login, a password reset link is on its way. Check your inbox (and spam).`; }
     else out.textContent = friendlyAuthError(err);
   }
+});
+$("#changePw").addEventListener("click", () => {
+  formDialog({
+    title: "Change your password",
+    submit: "Change password",
+    body: `<p class="muted" style="margin-top:0">Type the password you signed in with, then choose a new one (8 or more characters). No email is needed.</p>
+      <div class="form-grid" style="grid-template-columns:1fr">
+        <label class="f">Current password<input name="cur" type="password" autocomplete="current-password" required /></label>
+        <label class="f">New password<input name="pw1" type="password" autocomplete="new-password" minlength="8" required /></label>
+        <label class="f">New password again<input name="pw2" type="password" autocomplete="new-password" minlength="8" required /></label></div>`,
+    onSubmit: async (fd) => {
+      const cur = String(fd.get("cur") || ""), pw1 = String(fd.get("pw1") || ""), pw2 = String(fd.get("pw2") || "");
+      if (pw1.length < 8) throw new Error("The new password must be at least 8 characters.");
+      if (pw1 !== pw2) throw new Error("The two new passwords don't match.");
+      if (pw1 === cur) throw new Error("Choose a password that is different from the current one.");
+      const user = auth.currentUser;
+      try {
+        await A.reauthenticateWithCredential(user, A.EmailAuthProvider.credential(user.email, cur));
+        await A.updatePassword(user, pw1);
+      } catch (err) {
+        const c = err?.code || "";
+        if (c.includes("wrong-password") || c.includes("invalid-credential")) throw new Error("The current password isn't right.");
+        throw new Error(friendlyAuthError(err));
+      }
+      await commit([{ audit: { action: "admin.password_change", targetType: "admin", targetId: me.uid, summary: `${me.name} changed their own password` } }]);
+      toast("Password changed", "ok");
+    },
+  });
 });
 $("#signOut").addEventListener("click", () => { sessionStorage.removeItem("audit-login-" + me?.uid); A.signOut(auth); });
 
@@ -992,22 +1020,15 @@ function staffForm(existing) {
     submit: editing ? "Save changes" : "Add staff member",
     body: `<div class="form-grid">
       <label class="f">Employee ID<input name="id" value="${esc(existing?.id ?? "")}" ${editing ? "disabled" : ""} required inputmode="text" /></label>
-      <label class="f">Badge number <span class="muted" style="text-transform:none;font-weight:400">(the longer number their badge barcode reads)</span><input name="badge" value="${esc(existing?.badgeId ?? "")}" inputmode="text" /></label>
       <label class="f" style="grid-column:1/-1">Full name<input name="name" value="${esc(existing?.name ?? "")}" required /></label></div>
-      <p class="muted" style="font-size:13px;margin-bottom:0">Staff can scan their badge <i>or</i> type/scan their employee ID. Each check-out and check-in records which one they used. Tip: click into the Badge number field and scan their badge to fill it in.</p>`,
+      <p class="muted" style="font-size:13px;margin-bottom:0">Staff can scan their badge <i>or</i> type/scan their employee ID. The badge number is worked out for you (0000 + employee ID + 01).</p>`,
     onSubmit: async (fd) => {
       const name = str(fd, "name");
-      const badge = norm(fd.get("badge"));
       if (!name) throw new Error("Enter the person's name.");
-      if (badge && !validId(badge)) throw new Error("Badge number can only use letters, numbers, dot, dash and underscore (40 characters max).");
       if (editing) {
+        const badge = badgeFor(existing.id);
         const changedName = name !== existing.name, changedBadge = badge !== (existing.badgeId || "");
         if (!changedName && !changedBadge) throw new Error("No changes to save.");
-        if (changedBadge && badge) {
-          const owner = idOwner(badge);
-          if (owner && !(cache.staff.find((x) => x.badgeId === badge)?.id === existing.id)) throw new Error(`“${badge}” is already used by ${owner}.`);
-          if (badge === existing.id) throw new Error("The badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.");
-        }
         const ops = [];
         if (changedName) ops.push({
           ref: F.doc(db, "staff", existing.id), mode: "update", data: { name, updatedAt: now() },
@@ -1022,11 +1043,9 @@ function staffForm(existing) {
       if (!validId(id)) throw new Error("Employee ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
       const owner = idOwner(id);
       if (owner) throw new Error(`“${id}” is already used by ${owner}.`);
-      if (badge) {
-        if (badge === id) throw new Error("The badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.");
-        const bo = idOwner(badge);
-        if (bo) throw new Error(`Badge number “${badge}” is already used by ${bo}.`);
-      }
+      const badge = badgeFor(id);
+      const bo = idOwner(badge);
+      if (bo) throw new Error(`The badge number ${badge} is already used by ${bo}.`);
       await commit([staffCreateOp({ id, name, badgeId: badge })]);
       toast(`Added ${name}`, "ok");
     },
@@ -1059,7 +1078,7 @@ function importDialog(kind) {
   const isAsset = kind === "asset";
   const example = isAsset
     ? "assetType,model,imei,serial,phoneNumber\nRover phone,iPhone 13,356938035643809,F2LXYZ123,352-555-0101\nFob,,,,"
-    : "employeeId,badgeId,name\n10234,1002340077,Jane Doe";
+    : "employeeId,name\n10234,Jane Doe";
   const d = $("#dlg");
   d.onclose = null;
   const defaultSel = isAsset
@@ -1067,7 +1086,7 @@ function importDialog(kind) {
     : "";
   const help = isAsset
     ? "Columns: assetType (must already exist under Asset types), and optionally model, imei, serial, phoneNumber. You don't need an ID column: every device is numbered for you with the lowest free number for its type (R001, R002…). Add an assetId column only to choose a specific barcode. Each type's ticked detail fields (model, IMEI, serial, phone number) are required, so rows missing one are skipped, as are rows with an unknown type or a duplicate IMEI, serial or phone number."
-    : "Columns: employeeId, name (or firstName and lastName), and optionally badgeId. If someone already exists and the row has a badgeId, their badge number is filled in. Nothing else about them changes.";
+    : "Columns: employeeId and name (or firstName and lastName). Badge numbers are made for you (0000 + employee ID + 01). People who already exist are skipped.";
   d.innerHTML = `<h2>Import ${isAsset ? "assets" : "staff"} from a spreadsheet</h2>
     <p class="muted" style="margin-top:0">${fileNote} ${help}</p>
 <div class="row" style="margin:-4px 0 12px"><span class="muted">Need a blank to fill in?</span><button class="btn sm" type="button" id="tplXlsx">Download Excel template</button><button class="btn sm" type="button" id="tplCsv">Download CSV template</button></div>
@@ -1156,10 +1175,10 @@ function importAdminsDialog() {
   const d = $("#dlg");
   d.onclose = null;
   d.innerHTML = `<h2>Import admins from a spreadsheet</h2>
-    <p class="muted" style="margin-top:0">${fileNote} Columns: <b>email</b>, <b>name</b>, <b>employeeId</b> (admins are added to the staff list too), and optionally <b>badgeId</b> and <b>role</b> (admin or station; blank = admin). Each person gets an email to set their own password. They can then sign in at the admin page.</p>
+    <p class="muted" style="margin-top:0">${fileNote} Columns: <b>email</b>, <b>name</b>, <b>employeeId</b> (admins are added to the staff list too), and optionally <b>role</b> (admin or station; blank = admin). Each person gets an email to set their own password. They can then sign in at the admin page.</p>
 <div class="row" style="margin:-4px 0 12px"><span class="muted">Need a blank to fill in?</span><button class="btn sm" type="button" id="tplXlsx">Download Excel template</button><button class="btn sm" type="button" id="tplCsv">Download CSV template</button></div>
         <label class="f">Spreadsheet file<input type="file" id="impFile" accept="${FILE_ACCEPT}" /></label>
-    <label class="f" style="margin-top:10px">…or paste rows<textarea id="impText" placeholder="email,name,role,employeeId,badgeId\njordan@example.org,Jordan Lee,admin,10234,1002340077"></textarea></label>
+    <label class="f" style="margin-top:10px">…or paste rows<textarea id="impText" placeholder="email,name,role,employeeId\njordan@example.org,Jordan Lee,admin,10234"></textarea></label>
     <div id="impPreview" style="margin-top:12px"></div>
     <div class="foot"><button class="btn ghost" id="impClose">Close</button><button class="btn" id="impPrev">Preview</button><button class="btn primary" id="impGo" disabled>Create logins</button></div>`;
   let parsed = null, fileRows = null;
@@ -1370,13 +1389,12 @@ function linkStaffDialog(adminRec) {
     body: `<p class="muted" style="margin-top:0">${own ? "This lets you scan your badge or type your employee ID at the check-out station like everyone else. " : "This lets them check devices out like any other staff member. "}Once linked, ${own ? "you" : "they"} can't edit ${own ? "your" : "their"} own staff record or force-return a device ${own ? "you're" : "they're"} holding; another admin has to. ${own ? "That's a one-time step." : ""}</p>
       <div class="form-grid">
         <label class="f">Employee ID<input name="id" required inputmode="text" /></label>
-        <label class="f">Badge number <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="badge" inputmode="text" /></label>
-        <label class="f" style="grid-column:1/-1">Full name<input name="name" required value="${esc(adminRec.name || "")}" /></label></div>`,
+        <label class="f">Full name<input name="name" required value="${esc(adminRec.name || "")}" /></label></div>`,
     onSubmit: async (fd) => {
-      const id = norm(fd.get("id")), badge = norm(fd.get("badge")), name = str(fd, "name");
+      const id = norm(fd.get("id")), name = str(fd, "name");
       if (!name) throw new Error("Enter the person's name.");
       if (!validId(id)) throw new Error("Employee ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
-      const ops = await adminStaffOps(adminRec, id, badge, name);
+      const ops = await adminStaffOps(adminRec, id, name);
       await commit(ops);
       toast(`${adminRec.name || adminRec.email} is now on the staff list as ${id}`, "ok");
     },
@@ -1384,21 +1402,17 @@ function linkStaffDialog(adminRec) {
 }
 
 /** Checks, then returns the ops that link an existing admin to staff ID `id` (creating the staff record if there isn't one). */
-async function adminStaffOps(adminRec, id, badge, name) {
+async function adminStaffOps(adminRec, id, name) {
   const taken = cache.admins.find((x) => x.employeeId === id && x.id !== adminRec.id);
   if (taken) throw new Error(`Employee ID ${id} already belongs to admin ${taken.name || taken.email}.`);
   const existing = cache.staff.find((x) => x.id === id);
   const ops = [];
-  if (existing) {
-    if (badge && badge !== existing.badgeId) throw new Error(`${id} is already on the staff list (${existing.name}). Leave the badge number blank, or change it from the Staff tab.`);
-  } else {
+  if (!existing) {
     const owner = idOwner(id);
     if (owner) throw new Error(`“${id}” is already used by ${owner}.`);
-    if (badge) {
-      if (badge === id) throw new Error("The badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.");
-      const bo = idOwner(badge);
-      if (bo) throw new Error(`Badge number “${badge}” is already used by ${bo}.`);
-    }
+    const badge = badgeFor(id);
+    const bo = idOwner(badge);
+    if (bo) throw new Error(`The badge number ${badge} is already used by ${bo}.`);
     ops.push(staffCreateOp({ id, name, badgeId: badge }));
   }
   ops.push(adminLinkOp(adminRec, id));
@@ -1459,11 +1473,10 @@ $("#addAdmin").addEventListener("click", () =>
       <label class="f">Name or label<input name="name" required placeholder="e.g. Jordan Lee / Dispatch desk" /></label>
       <label class="f">Email<input name="email" type="email" required autocomplete="off" /></label>
       <label class="f">Temporary password<input name="pw" type="text" required minlength="8" autocomplete="off" placeholder="8+ characters" /></label>
-      <label class="f" id="adminEmpWrap">Employee ID <span class="muted" style="text-transform:none;font-weight:400">(they're added to staff too)</span><input name="empId" inputmode="text" /></label>
-      <label class="f" id="adminBadgeWrap">Badge number <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="badge" inputmode="text" /></label></div>
+      <label class="f" id="adminEmpWrap">Employee ID <span class="muted" style="text-transform:none;font-weight:400">(they're added to staff too)</span><input name="empId" inputmode="text" /></label></div>
       <p class="muted" style="font-size:13px;margin-bottom:0">Share the temporary password privately. They can change it any time with “Send password reset”. Administrators are also added to the staff list so they can check devices out; they can't edit their own staff record or devices they hold.</p>`,
     onOpen: (d) => {
-      const sync = () => { const isAdmin = $("[name=role]", d).value === "admin"; $("#adminEmpWrap", d).classList.toggle("hidden", !isAdmin); $("#adminBadgeWrap", d).classList.toggle("hidden", !isAdmin); };
+      const sync = () => { const isAdmin = $("[name=role]", d).value === "admin"; $("#adminEmpWrap", d).classList.toggle("hidden", !isAdmin); };
       $("[name=role]", d).addEventListener("change", sync);
       sync();
     },
@@ -1471,12 +1484,12 @@ $("#addAdmin").addEventListener("click", () =>
       const role = str(fd, "role"), name = str(fd, "name"), email = str(fd, "email").toLowerCase(), pw = String(fd.get("pw") || "");
       if (pw.length < 8) throw new Error("Password must be at least 8 characters.");
       // Check the staff details BEFORE creating the login, so a typo doesn't leave a half-made account behind.
-      let empId = "", badge = "", staffOps = [];
+      let empId = "", staffOps = [];
       if (role === "admin") {
-        empId = norm(fd.get("empId")); badge = norm(fd.get("badge"));
+        empId = norm(fd.get("empId"));
         if (!empId) throw new Error("Enter their employee ID so they're added to the staff list too.");
         if (!validId(empId)) throw new Error("Employee ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
-        staffOps = (await adminStaffOps({ id: "(new)", name, email }, empId, badge, name)).filter((o) => o.ref.path.startsWith("staff/"));
+        staffOps = (await adminStaffOps({ id: "(new)", name, email }, empId, name)).filter((o) => o.ref.path.startsWith("staff/"));
       }
 
       // Create the login on a throw-away second app instance so this admin stays signed in.

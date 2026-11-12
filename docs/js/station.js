@@ -2,8 +2,8 @@ import { auth, db, A, F, configured, friendlyAuthError } from "./fb.js";
 import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
-import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=15";
+import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep, eidFromBadge } from "./util.js";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=16";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -181,6 +181,12 @@ async function lookup(code) {
   const [st, b] = await Promise.all([stP, bP]);
   if (st.exists()) return { kind: "employee", method: "eid", rec: { id: st.id, ...st.data() } };
   if (!b.empty) return { kind: "employee", method: "badge", rec: { id: b.docs[0].id, ...b.docs[0].data() } };
+  // Every badge reads 0000 + employee ID + 01, so a badge still works even if its number was never saved on the staff record.
+  const eid = eidFromBadge(code);
+  if (eid && validId(eid)) {
+    const bs = await F.getDoc(F.doc(db, "staff", eid));
+    if (bs.exists()) return { kind: "employee", method: "badge", rec: { id: bs.id, ...bs.data() } };
+  }
   return { kind: "unknown" };
 }
 

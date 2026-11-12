@@ -75,7 +75,7 @@ Edit the file in GitHub (pencil → Commit). Pages republishes in about a minute
 | Inactive badge / out-of-service device / unknown code | Clear red message (lost devices say "marked LOST, tell your supervisor") |
 
 ### Badge number vs employee ID
-A badge's barcode is usually the employee ID plus a few extra digits. Each person has an **employee ID** and, optionally, a **badge number** (Staff tab). At the station they can scan the badge *or* scan/type the employee ID; both find the same person. Every check-out and check-in records which one was used (**Badge**, **Employee ID**, or **Device only** when a device is returned by scanning it alone). It shows in the Reports activity table and CSV ("ID Used"), and the report's staff table counts badge scans vs ID entries per person. A badge number can't equal any other employee ID, device ID or badge number.
+Every badge barcode reads **0000 + employee ID + 01** (employee 1001 → `0000100101`), so the badge number is never typed in: it is generated when a person is added (form, spreadsheet import, or when an admin is added). The station also recognizes that pattern for people whose badge number was never saved. At the station people can scan the badge *or* type/scan their employee ID, and each check-out and check-in records which one they used.
 
 The station home screen has three buttons: **Check out** (badge, then device), **Check in** (just the device) and **Report damaged**. Scanning from the home screen also works as a shortcut (a badge starts a check-out, a device a check-in). Every step accepts a hardware scanner, the **📷 Camera** button (phones/tablets) or typing the ID in the field (typed IDs are logged as "manual"). After a result the station returns to the home screen by itself after about 3 seconds (and the camera closes). **← Back** / **Esc** goes home immediately; an idle step times out after a minute.
 
@@ -107,7 +107,7 @@ Bulk label printing with saved templates is in Assets/Staff (tick rows → **Pri
 ## Admin portal notes
 - **Asset types** (*Assets → Asset types…*) is the only place to add a new kind of item (Rover phone, iPad, Fob). Give it a name, optional **ID letters** (e.g. `S` for Supervisor phone) and tick which detail fields apply, so a **Fob** can have none. **Add asset** then starts with "What kind of item is this?"; once you pick a type it fills in the barcode ID for you: the letters plus the next number after the highest one already used, always 3 digits (`S001`, `S002`, … `S010`), starting at `001` for a new type. A type with no letters means you type each ID. You can change the suggested ID, but one that is already taken is flagged and refused. **Add & add another** saves and keeps the form open on the next ID. The detail fields you tick for a type (model, phone number, IMEI, serial) are **required** when adding or editing an item of that type and in uploads (rows missing one are skipped); leave a field unticked if it doesn't apply, as with a fob.
 - **One of each kind:** a person can hold one device *per type* at a time, so a rover phone and a fob together is fine, two rover phones is not.
-- **Staff** have an employee ID, an optional badge number, and a name.
+- **Staff** have an employee ID and a name. The badge number is generated from the employee ID.
 - **Admins are staff too.** Every administrator is also on the staff list (they have an employee ID and optional badge number), so they can scan out a phone or fob like anyone else. The first time an existing admin signs in after this update they're asked for their employee ID; new admins (added one at a time or by spreadsheet) need an employee ID up front. A still-unlinked admin shows an **Add to staff** button on the Admins tab.
 - **Admins can't edit their own records.** An admin can't change their own staff record (name, badge, PIN, removal), can't force-return, mark lost or edit a device they are holding, and can't edit or deactivate their own admin entry. Another admin has to do it. Check-out and check-in history can't be edited by anyone, admin or not; corrections are new entries. These limits are enforced by the database rules, not just the buttons. They apply once an admin is linked to a staff record.
 - **Admins:** add one at a time, or import a spreadsheet.
@@ -117,9 +117,9 @@ Bulk label printing with saved templates is in Assets/Staff (tick rows → **Pri
 
 | Import | Columns |
 |---|---|
-| Staff | `employeeId`, `name` (or `firstName` + `lastName`), optional `badgeId`. If the employee already exists and the row has a `badgeId`, their badge number is filled in and nothing else changes. To add badge numbers for everyone, import `employeeId` + `badgeId`. |
+| Staff | `employeeId`, `name` (or `firstName` + `lastName`). Badge numbers are generated automatically (0000 + employee ID + 01). Employee IDs that already exist are skipped. |
 | Assets | `assetType` (needed; must already exist under Assets → Asset types, otherwise the row is skipped) plus whichever of `model`, `imei`, `serial`, `phoneNumber` the type requires (ticked under Asset types). **No ID column is needed:** each device is numbered from its type's ID letters with the lowest free number (R001, R002, R003…). Add an `assetId` column only to pick a specific barcode, or for a type with no ID letters. |
-| Admins | `email`, `name`, `employeeId` (needed for admins; they're added to staff too), optional `badgeId`, optional `role` (`admin` or `station`). Each person is emailed a link to set their own password. |
+| Admins | `email`, `name`, `employeeId` (needed for admins; they're added to staff too), optional `role` (`admin` or `station`). Each person is emailed a link to set their own password. |
 
 ## Equipment
 USB barcode scanner in keyboard mode that sends Enter; thermal label printer (Code 128; 2.25×1.25 in is common) or plain paper; badges must carry a barcode (magstripe/RFID need a different reader); any computer with Chrome/Edge.
@@ -178,3 +178,7 @@ See the header of `tests/rules.test.mjs`. Needs Node, Java 11+ and `npm i --no-s
 
 ## Forgotten admin password
 The admin sign-in page has **Forgot password?**: type your email, tap it, and Firebase emails a reset link. Admins can also be sent one from the Admins tab.
+
+
+## Changing your password
+Signed-in admins can use **Change password** (top right of the admin page): type the current password, then the new one twice. No email is involved, and the change is recorded in the changelog (never the password itself). This is also how someone replaces the temporary password they were given. If a reset *email* doesn't arrive: check spam/junk (it comes from a `noreply@…firebaseapp.com` address), make sure the address is exactly the one the login was created with, and wait a few minutes.

@@ -5,7 +5,7 @@ import { norm } from "./util.js";
 const ZXING = ["https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js", "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"];
 const FORMATS = ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "codabar", "qr_code"];
 const SAME_CODE_GAP_MS = 2500;
-export const CAMERA_VERSION = "15";
+export const CAMERA_VERSION = "16";
 
 /**
  * Pure. The camera sees the same barcode on every frame, so a code only counts again after it has been out of view for `gap` ms.

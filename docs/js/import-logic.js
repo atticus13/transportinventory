@@ -1,6 +1,6 @@
 // Pure spreadsheet-import parsing (no Firebase) — unit tested in tests/.
 // Works on rows read from a CSV, a pasted table or an Excel sheet (array of arrays; first row = header).
-import { norm, validId, lowestFreeIdFor } from "./util.js";
+import { norm, validId, lowestFreeIdFor, badgeFor } from "./util.js";
 
 /** Compare IMEIs, serials and phone numbers loosely: ignore case, spaces, dashes and brackets. */
 export const normDetail = (field, v) => {
@@ -81,8 +81,8 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
 
   if (kind === "staff") {
     if (idx.id === -1) return { ...none, fatal: "Couldn't find an employee ID column. Name it “employeeId”." };
-    if (idx.name === -1 && (idx.first === -1 || idx.last === -1) && idx.badge === -1)
-      return { ...none, fatal: "Couldn't find a name column. Use “name”, or “firstName” and “lastName”. (A file with just employeeId and badgeId can only add badge numbers to people who already exist.)" };
+    if (idx.name === -1 && (idx.first === -1 || idx.last === -1))
+      return { ...none, fatal: "Couldn't find a name column. Use “name”, or “firstName” and “lastName”." };
   } else if (Object.values(idx).every((i) => i === -1)) {
     return { ...none, fatal: "Couldn't recognise any columns. Use: assetId, assetType, model, imei, serial, phoneNumber." };
   }
@@ -119,38 +119,15 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
 
     if (kind === "staff") {
       const name = idx.name !== -1 ? cell(r, idx.name) : `${cell(r, idx.first)} ${cell(r, idx.last)}`.trim();
-      const badge = norm(cell(r, idx.badge));
       if (!rawId) return errors.push({ line, message: "Missing employee ID." });
       if (!validId(rawId)) return errors.push({ line, message: BAD_ID(rawId) });
-      if (badge && !validId(badge)) return errors.push({ line, message: `${rawId}: badge number ${BAD_ID(badge)}` });
-      if (badge && badge === rawId) return errors.push({ line, message: `${rawId}: the badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.` });
-
-      const badgeClash = () => {
-        if (!badge) return null;
-        if (seen.has(badge)) return `${rawId}: badge number ${badge} is used twice in the file.`;
-        if (existingIds.has(badge) && existingStaff.get(rawId)?.badgeId !== badge) return `${rawId}: badge number ${badge} is already used by someone or something else.`;
-        return null;
-      };
-
-      // Existing person → this row can fill in their badge number
-      if (existingStaff.has(rawId)) {
-        const cur = existingStaff.get(rawId);
-        if (!badge) return errors.push({ line, message: `${rawId} already exists — skipped.` });
-        if (cur.badgeId === badge) return errors.push({ line, message: `${rawId} already has badge ${badge} — skipped.` });
-        const clash = badgeClash();
-        if (clash) return errors.push({ line, message: clash });
-        seen.add(rawId); seen.add(badge);
-        updates.push({ id: rawId, name: cur.name, badgeId: badge, previous: cur.badgeId || "" });
-        return;
-      }
-
+      if (existingStaff.has(rawId)) return errors.push({ line, message: `${rawId} already exists — skipped.` });
       if (existingIds.has(rawId)) return errors.push({ line, message: `${rawId} is already used by a device — skipped.` });
       if (seen.has(rawId)) return errors.push({ line, message: `${rawId} appears twice in the file — skipped.` });
       if (!name) return errors.push({ line, message: `${rawId}: missing name.` });
-      const clash = badgeClash();
-      if (clash) return errors.push({ line, message: clash });
-      seen.add(rawId);
-      if (badge) seen.add(badge);
+      const badge = badgeFor(rawId);   // always 0000 + employee ID + 01
+      if (existingIds.has(badge) || seen.has(badge)) return errors.push({ line, message: `${rawId}: its badge number ${badge} is already used by someone or something else — skipped.` });
+      seen.add(rawId); seen.add(badge);
       records.push({ id: rawId, name, badgeId: badge });
       return;
     }
@@ -231,21 +208,18 @@ export function parseAdminImport(rows, { existingEmails = new Set(), existingIds
     let employeeId = "", badgeId = "", newStaff = false;
     if (role === "admin") {
       employeeId = norm(cellOf(r, idx.employeeId));
-      badgeId = norm(cellOf(r, idx.badge));
       if (!employeeId) return errors.push({ line, message: `${email}: admins need an employeeId so they're added to staff too — skipped.` });
       if (!validId(employeeId)) return errors.push({ line, message: `${email}: employee ID ${BAD_ID(employeeId)}` });
       if (linkedStaff.has(employeeId)) return errors.push({ line, message: `${email}: employee ID ${employeeId} already belongs to another admin — skipped.` });
       if (claimed.has(employeeId)) return errors.push({ line, message: `${email}: employee ID ${employeeId} appears twice in the file — skipped.` });
       newStaff = !existingStaff.has(employeeId);
       if (newStaff && existingIds.has(employeeId)) return errors.push({ line, message: `${email}: “${employeeId}” is already used by something else — skipped.` });
-      if (badgeId) {
-        if (!validId(badgeId)) return errors.push({ line, message: `${email}: badge number ${BAD_ID(badgeId)}` });
-        if (badgeId === employeeId) return errors.push({ line, message: `${email}: the badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.` });
+      if (newStaff) {
+        badgeId = badgeFor(employeeId);   // always 0000 + employee ID + 01
         if (existingIds.has(badgeId) || claimed.has(badgeId)) return errors.push({ line, message: `${email}: badge number ${badgeId} is already in use — skipped.` });
-        if (!newStaff) badgeId = ""; // an existing person keeps the badge they already have
+        claimed.add(badgeId);
       }
       claimed.add(employeeId);
-      if (badgeId) claimed.add(badgeId);
     }
     seen.add(email);
     records.push({ email, name, role, employeeId, badgeId, newStaff });
@@ -257,14 +231,13 @@ export function parseAdminImport(rows, { existingEmails = new Set(), existingIds
 export const TEMPLATES = {
   staff: {
     file: "staff-template",
-    headers: ["employeeId", "badgeId", "name"],
+    headers: ["employeeId", "name"],
     notes: [
       ["Staff import: how to fill this in"],
       ["employeeId", "Required. The employee ID. Letters, numbers, dot, dash or underscore only."],
-      ["badgeId", "Optional. The number the ID badge barcode reads (usually the employee ID plus a few digits). Leave blank if the badge shows the employee ID."],
       ["name", "Required for new people. You can use firstName and lastName columns instead."],
       [""],
-      ["If an employeeId already exists and you give a badgeId, that person's badge number is filled in. Nothing else about them changes."],
+      ["Badge numbers are generated automatically (0000 + employee ID + 01), so there is no badge column. Employee IDs that already exist are skipped."],
       ["Format the ID columns as Text so leading zeros are kept. Only the first sheet is imported."],
     ],
   },
@@ -279,14 +252,14 @@ export const TEMPLATES = {
   },
   admin: {
     file: "admins-template",
-    headers: ["email", "name", "role", "employeeId", "badgeId"],
+    headers: ["email", "name", "role", "employeeId"],
     notes: [
       ["Admin import: how to fill this in"],
       ["email", "Required. Each person is emailed a link to set their own password."],
       ["name", "Required. A person's name, or a label for a station login such as Dispatch desk."],
       ["role", "Optional. admin (full access) or station (scan screen only). Blank means admin."],
       ["employeeId", "Required for admins. They are added to your staff list under this ID so they can check devices out too. Leave blank for station logins."],
-      ["badgeId", "Optional, admins only. The number their badge barcode reads."],
+      ["(badge numbers)", "Generated automatically from the employee ID (0000 + employee ID + 01)."],
       [""],
       ["Emails that already have a login are skipped. Only the first sheet is imported."],
     ],
