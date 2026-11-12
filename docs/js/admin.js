@@ -1444,9 +1444,14 @@ function renderAdmins() {
         ${self ? "" : u.active ? '<button class="btn sm danger" data-act="deactivate">Deactivate</button>' : '<button class="btn sm" data-act="reactivate">Reactivate</button>'}
       </td></tr>`;
   };
-  $("#adminsBody").innerHTML = cache.admins.map(rowFor("admin")).join("") || emptyRow(5, "No administrators.");
-  $("#stationsBody").innerHTML = cache.stations.map(rowFor("station")).join("") || emptyRow(5, "No station logins yet. Add one for the check-out computer.");
+  const showOld = $("#adminsRemoved").checked;
+  const vis = (list) => list.filter((u) => showOld || u.active !== false);
+  const hidden = [...cache.admins, ...cache.stations].filter((u) => u.active === false).length;
+  $("#adminsHiddenNote").textContent = hidden && !showOld ? `${hidden} deactivated hidden` : "";
+  $("#adminsBody").innerHTML = vis(cache.admins).map(rowFor("admin")).join("") || emptyRow(5, "No administrators.");
+  $("#stationsBody").innerHTML = vis(cache.stations).map(rowFor("station")).join("") || emptyRow(5, "No station logins yet. Add one for the check-out computer.");
 }
+$("#adminsRemoved").addEventListener("input", renderAdmins);
 
 $("#tab-admins").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-act]");

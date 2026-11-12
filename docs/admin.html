@@ -294,6 +294,7 @@
       <section id="tab-admins" class="tabpane hidden">
         <div class="card">
           <div class="card-head"><h2>Administrators</h2><div class="spacer"></div><button class="btn" id="importAdmins">Import spreadsheet</button><button class="btn primary" id="addAdmin">+ Add admin / station login</button></div>
+          <div class="card-head" style="padding-top:0"><label class="chk"><input type="checkbox" id="adminsRemoved" /> Show deactivated</label><span class="muted" id="adminsHiddenNote"></span></div>
           <div class="table-wrap"><table>
             <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Added</th><th></th></tr></thead>
             <tbody id="adminsBody"></tbody>
@@ -341,6 +342,6 @@
   </div>
 
   <dialog id="dlg"></dialog>
-  <script type="module" src="js/admin.js?v=18"></script>
+  <script type="module" src="js/admin.js?v=19"></script>
 </body>
 </html>
