@@ -56,7 +56,6 @@
     .manual-head h3 { margin: 0; }
     .fieldrow { display: flex; gap: 8px; }
     .fieldrow input { flex: 1; min-width: 0; }
-    .kbswap { display: none; }
 
     /* Recent activity: always shown at the bottom on a big screen with a mouse; behind a button on phones and tablets */
     .recent-box > summary { display: flex; align-items: center; justify-content: space-between; gap: 10px; cursor: pointer; list-style: none; min-height: 44px; }
@@ -71,9 +70,7 @@
     }
 
     /* Touch screens (phones, tablets): bigger buttons and fields, number keyboard */
-    .touch-only { display: none; }
     @media (pointer: coarse) {
-      .touch-only, .kbswap { display: inline-flex; }
       .btn { min-height: 52px; font-size: 16px; padding: 12px 20px; }
       .btn.sm { min-height: 46px; padding: 10px 16px; }
       .scanrow input, .report-panel input, #manualForm input { min-height: 58px; font-size: 22px; }
@@ -91,6 +88,11 @@
       .stage .icon { width: 68px; height: 68px; }
       .stage .icon svg { width: 34px; height: 34px; }
       .stage .sub { font-size: 16px; }
+      .stage { min-height: 0 !important; padding: 14px 14px; gap: 4px; }
+      .stage .icon { display: none; }
+      .stage .title { font-size: 22px; }
+      .stage .name { font-size: 20px; }
+      .stage .sub { font-size: 14px; }
       .actions { grid-template-columns: 1fr; }
       .keypad { grid-template-columns: repeat(3, 1fr); }
       .scanrow { flex-wrap: wrap; }
@@ -182,9 +184,8 @@
 
       <div class="scanrow">
         <input id="scan" type="text" inputmode="none" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false"
-               placeholder="Scanner ready — scan a barcode" aria-label="Barcode scan field" />
+               placeholder="Scanner ready" aria-label="Barcode scan field" />
         <button class="btn" id="camBtn" type="button" hidden aria-label="Scan with the camera">📷 Camera</button>
-        <button class="btn touch-only" id="kbToggle" type="button" aria-label="Switch the keyboard between numbers and letters">ABC</button>
         <button class="btn" id="clearBtn" title="Cancel and start over (Esc)">Start over</button>
       </div>
 
@@ -205,10 +206,10 @@
         <div class="manual-head"><h3>Type the IDs</h3><button class="btn ghost sm" type="button" id="manualClose">Close</button></div>
         <form id="manualForm" class="form-grid" style="grid-template-columns:1fr">
           <label class="f">Badge or employee ID <span style="text-transform:none;font-weight:400">(leave blank to return a device)</span>
-            <span class="fieldrow"><input id="mEmp" type="text" inputmode="numeric" enterkeyhint="next" autocomplete="off" autocapitalize="characters" /><button class="btn kbswap" type="button" data-kbswap="mEmp" aria-label="Switch the keyboard between numbers and letters">ABC</button></span>
+            <span class="fieldrow"><input id="mEmp" type="text" inputmode="text" enterkeyhint="next" autocomplete="off" autocapitalize="characters" /></span>
           </label>
           <label class="f">Device ID <span style="text-transform:none;font-weight:400">(e.g. PH-001)</span>
-            <span class="fieldrow"><input id="mPhone" type="text" inputmode="text" enterkeyhint="go" autocomplete="off" autocapitalize="characters" /><button class="btn kbswap" type="button" data-kbswap="mPhone" aria-label="Switch the keyboard between numbers and letters">123</button></span>
+            <span class="fieldrow"><input id="mPhone" type="text" inputmode="text" enterkeyhint="go" autocomplete="off" autocapitalize="characters" /></span>
           </label>
           <button class="btn primary" type="submit" style="justify-content:center">Submit</button>
         </form>
@@ -225,6 +226,6 @@
     </main>
   </div>
 
-  <script type="module" src="js/station.js"></script>
+  <script type="module" src="js/station.js?v=5"></script>
 </body>
 </html>

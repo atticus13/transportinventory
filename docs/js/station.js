@@ -60,7 +60,7 @@ function setPinUi(on) {
   $("#stPins").textContent = "";
   const el = scanEl();
   el.type = on ? "password" : "text";
-  el.placeholder = on ? "Type your PIN, then press Enter" : "Scanner ready — scan a barcode";
+  el.placeholder = on ? "Type your PIN, then press Enter" : "Scanner ready";
   el.value = "";
 }
 const updateDots = () => { if (pinActive()) $("#stPins").textContent = "●".repeat(scanEl().value.length); };
@@ -565,29 +565,12 @@ $("#manual").addEventListener("toggle", () => {
 $("#manualBtn").addEventListener("click", () => { $("#manual").open = !$("#manual").open; });
 $("#manualClose").addEventListener("click", () => { $("#manual").open = false; });
 
-// Touch screens: tapping the scan field brings up a NUMBER keyboard (it stays hidden otherwise so a scanner never pops it up);
-// the ABC / 123 buttons switch to letters for IDs like PH-001.
+// Touch screens: the scan field normally keeps the keyboard hidden (so a hardware scanner never pops it up);
+// tapping it brings up the normal letters keyboard.
 const mq = (q) => window.matchMedia?.(q)?.matches ?? false;
 if (mq("(pointer: coarse)")) {
-  let kb = "numeric";
-  scan.placeholder = "Scan, or tap here to type an ID";
-  scan.addEventListener("pointerdown", () => { scan.inputMode = kb; });
+  scan.addEventListener("pointerdown", () => { scan.inputMode = "text"; });
   scan.addEventListener("blur", () => { scan.inputMode = "none"; });
-  $("#kbToggle").addEventListener("click", () => {
-    kb = kb === "numeric" ? "text" : "numeric";
-    $("#kbToggle").textContent = kb === "numeric" ? "ABC" : "123";
-    scan.inputMode = kb;
-    scan.focus();
-  });
-}
-for (const b of $$("[data-kbswap]")) {
-  b.addEventListener("click", () => {
-    const input = $("#" + b.dataset.kbswap);
-    const toText = input.inputMode !== "text";
-    input.inputMode = toText ? "text" : "numeric";
-    b.textContent = toText ? "123" : "ABC";
-    input.focus();
-  });
 }
 
 // Camera scanning (phones/tablets, or any device with a camera). The camera stays open between scans (badge, then device)
