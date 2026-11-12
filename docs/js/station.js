@@ -3,7 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=13";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=14";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -83,6 +83,7 @@ function idle() {
   pending = null;
   camHandle?.close?.();
   document.body.classList.add("home");
+  if (auth.currentUser) setTimeout(refreshRecent, 600);   // give the write a moment to land, then show it
   setPinUi(false);
   setStage("idle", {
     title: "What would you like to do?",
@@ -500,26 +501,31 @@ async function commit(decision, asset, employee, source) {
 }
 
 // ───────── recent activity ─────────
+const recentQuery = () => F.query(F.collection(db, "logs"), F.orderBy("ts", "desc"), F.limit(8));
+function renderRecent(snap) {
+  const box = $("#recent");
+  if (snap.empty) { box.innerHTML = '<div class="empty">No activity yet.</div>'; return; }
+  const tag = { out: ["out", "OUT"], in: ["in", "IN"], missed: ["warn", "MISSED"] };
+  box.innerHTML = snap.docs.map((doc) => {
+    const l = doc.data({ serverTimestamps: "estimate" });
+    const [cls, text] = tag[l.type] || ["off", "?"];
+    return `<div class="recent-row">
+      <span class="chip ${cls}">${text}</span>
+      <span class="who">${esc(l.employeeName)}</span>
+      <span class="mono muted">${esc(l.assetId)}</span>
+      <span class="t">${fmtTime(l.ts)}</span></div>`;
+  }).join("");
+}
 function listenRecent() {
   unsubRecent?.();
-  unsubRecent = F.onSnapshot(
-    F.query(F.collection(db, "logs"), F.orderBy("ts", "desc"), F.limit(8)),
-    (snap) => {
-      const box = $("#recent");
-      if (snap.empty) { box.innerHTML = '<div class="empty">No activity yet.</div>'; return; }
-      const tag = { out: ["out", "OUT"], in: ["in", "IN"], missed: ["warn", "MISSED"] };
-      box.innerHTML = snap.docs.map((doc) => {
-        const l = doc.data({ serverTimestamps: "estimate" });
-        const [cls, text] = tag[l.type] || ["off", "?"];
-        return `<div class="recent-row">
-          <span class="chip ${cls}">${text}</span>
-          <span class="who">${esc(l.employeeName)}</span>
-          <span class="mono muted">${esc(l.assetId)}</span>
-          <span class="t">${fmtTime(l.ts)}</span></div>`;
-      }).join("");
-    },
-    () => { $("#recent").innerHTML = '<div class="empty">Activity unavailable.</div>'; }
-  );
+  unsubRecent = F.onSnapshot(recentQuery(), renderRecent, () => { $("#recent").innerHTML = '<div class="empty">Activity unavailable.</div>'; });
+}
+/** Belt and braces: also re-read the list whenever we come back to the home screen or the page becomes visible again. */
+let recentAt = 0;
+async function refreshRecent() {
+  if (Date.now() - recentAt < 1500) return;
+  recentAt = Date.now();
+  try { renderRecent(await F.getDocs(recentQuery())); } catch (e) { console.error("recent", e); }
 }
 
 // ───────── auth ─────────
@@ -682,6 +688,6 @@ $("#clock").addEventListener("click", () => {
   if (clockClicks.length >= 5 && document.body.classList.contains("kiosk")) { clockClicks = []; setKiosk(false); }
 });
 document.addEventListener("keydown", (e) => { if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === "k") { e.preventDefault(); setKiosk(!document.body.classList.contains("kiosk")); } });
-document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible" && document.body.classList.contains("kiosk")) holdScreenAwake(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") { if (document.body.classList.contains("kiosk")) holdScreenAwake(); if (auth.currentUser) refreshRecent(); } });
 
 boot();
