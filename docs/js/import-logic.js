@@ -44,6 +44,8 @@ const COLS = {
     email: ["email", "emailaddress", "mail"],
     name: ["name", "fullname"],
     role: ["role", "type", "access"],
+    employeeId: ["employeeid", "empid", "eid", "employeenumber", "staffid", "id"],
+    badge: ["badgeid", "badgenumber", "badgeno", "badge", "badgenum"],
   },
 };
 
@@ -191,10 +193,15 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
 }
 
 /**
- * Admin / station-login sheet: email, name, optional role ("admin" or "station"; default admin).
+ * Admin / station-login sheet: email, name, optional role ("admin" or "station"; default admin),
+ * plus employeeId (required for admins, they are added to staff too) and optional badgeId.
  * existingEmails : Set<string> lower-case emails that already have an admin or station record
+ * existingIds    : Set<string> every asset id, staff id and badge number already in use
+ * existingStaff  : Set<string> employee IDs that already exist as staff (an admin may be linked to one)
+ * linkedStaff    : Set<string> employee IDs already linked to another admin
+ * returns records: {email, name, role, employeeId, badgeId, newStaff}
  */
-export function parseAdminImport(rows, { existingEmails = new Set() } = {}) {
+export function parseAdminImport(rows, { existingEmails = new Set(), existingIds = new Set(), existingStaff = new Set(), linkedStaff = new Set() } = {}) {
   const errors = [];
   if (!rows.length) return { records: [], errors, fatal: "Nothing to import." };
   const header = rows[0].map(key);
@@ -202,6 +209,7 @@ export function parseAdminImport(rows, { existingEmails = new Set() } = {}) {
   if (idx.email === -1) return { records: [], errors, fatal: "Couldn't find an email column. Name it “email”." };
 
   const seen = new Set();
+  const claimed = new Set();   // employee IDs and badge numbers used by earlier rows in this file
   const records = [];
   rows.slice(1).forEach((r, n) => {
     const line = n + 2;
@@ -219,8 +227,28 @@ export function parseAdminImport(rows, { existingEmails = new Set() } = {}) {
       else return errors.push({ line, message: `${email}: role “${roleRaw}” isn't recognised. Use admin or station.` });
     }
     if (!name) return errors.push({ line, message: `${email}: missing name.` });
+
+    let employeeId = "", badgeId = "", newStaff = false;
+    if (role === "admin") {
+      employeeId = norm(cellOf(r, idx.employeeId));
+      badgeId = norm(cellOf(r, idx.badge));
+      if (!employeeId) return errors.push({ line, message: `${email}: admins need an employeeId so they're added to staff too — skipped.` });
+      if (!validId(employeeId)) return errors.push({ line, message: `${email}: employee ID ${BAD_ID(employeeId)}` });
+      if (linkedStaff.has(employeeId)) return errors.push({ line, message: `${email}: employee ID ${employeeId} already belongs to another admin — skipped.` });
+      if (claimed.has(employeeId)) return errors.push({ line, message: `${email}: employee ID ${employeeId} appears twice in the file — skipped.` });
+      newStaff = !existingStaff.has(employeeId);
+      if (newStaff && existingIds.has(employeeId)) return errors.push({ line, message: `${email}: “${employeeId}” is already used by something else — skipped.` });
+      if (badgeId) {
+        if (!validId(badgeId)) return errors.push({ line, message: `${email}: badge number ${BAD_ID(badgeId)}` });
+        if (badgeId === employeeId) return errors.push({ line, message: `${email}: the badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.` });
+        if (existingIds.has(badgeId) || claimed.has(badgeId)) return errors.push({ line, message: `${email}: badge number ${badgeId} is already in use — skipped.` });
+        if (!newStaff) badgeId = ""; // an existing person keeps the badge they already have
+      }
+      claimed.add(employeeId);
+      if (badgeId) claimed.add(badgeId);
+    }
     seen.add(email);
-    records.push({ email, name, role });
+    records.push({ email, name, role, employeeId, badgeId, newStaff });
   });
   return { records, errors };
 }
@@ -254,12 +282,14 @@ export const TEMPLATES = {
   },
   admin: {
     file: "admins-template",
-    headers: ["email", "name", "role"],
+    headers: ["email", "name", "role", "employeeId", "badgeId"],
     notes: [
       ["Admin import: how to fill this in"],
       ["email", "Required. Each person is emailed a link to set their own password."],
       ["name", "Required. A person's name, or a label for a station login such as Dispatch desk."],
       ["role", "Optional. admin (full access) or station (scan screen only). Blank means admin."],
+      ["employeeId", "Required for admins. They are added to your staff list under this ID so they can check devices out too. Leave blank for station logins."],
+      ["badgeId", "Optional, admins only. The number their badge barcode reads."],
       [""],
       ["Emails that already have a login are skipped. Only the first sheet is imported."],
     ],

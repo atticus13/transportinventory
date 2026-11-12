@@ -6,7 +6,7 @@ export async function loadAdmin(user) {
   try {
     const snap = await F.getDoc(F.doc(db, "admins", user.uid));
     if (!snap.exists() || snap.data().active !== true) return null;
-    return { uid: user.uid, email: user.email, name: snap.data().name || user.email };
+    return { uid: user.uid, email: user.email, name: snap.data().name || user.email, employeeId: snap.data().employeeId || null };
   } catch (e) {
     console.error(e);
     return null;

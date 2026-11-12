@@ -111,6 +111,8 @@ Bulk label printing with saved templates is in Assets/Staff (tick rows → **Pri
 - **Asset types** (*Assets → Asset types…*): categories such as Rover phone, iPad or Fob. The **ID prefix is optional**. It only starts the *suggested* next ID when you add an item: prefix `R` with 0 digits suggests `R1, R2, R3…`; prefix `PH-` with 3 digits suggests `PH-001`; no prefix means you type each ID. You can always type any ID. Each type also chooses which detail fields apply, so a **Fob** can have none. Every detail field (model, IMEI, serial, phone number) is optional.
 - **One of each kind:** a person can hold one device *per type* at a time, so a rover phone and a fob together is fine, two rover phones is not.
 - **Staff** have an employee ID, an optional badge number, and a name.
+- **Admins are staff too.** Every administrator is also on the staff list (they have an employee ID and optional badge number), so they can scan out a phone or fob like anyone else. The first time an existing admin signs in after this update they're asked for their employee ID; new admins (added one at a time or by spreadsheet) need an employee ID up front. A still-unlinked admin shows an **Add to staff** button on the Admins tab.
+- **Admins can't edit their own records.** An admin can't change their own staff record (name, badge, PIN, removal), can't force-return, mark lost or edit a device they are holding, and can't edit or deactivate their own admin entry. Another admin has to do it. Check-out and check-in history can't be edited by anyone, admin or not; corrections are new entries. These limits are enforced by the database rules, not just the buttons. They apply once an admin is linked to a staff record.
 - **Admins:** add one at a time, or import a spreadsheet.
 
 ## Spreadsheet imports
@@ -120,7 +122,7 @@ Bulk label printing with saved templates is in Assets/Staff (tick rows → **Pri
 |---|---|
 | Staff | `employeeId`, `name` (or `firstName` + `lastName`), optional `badgeId`. If the employee already exists and the row has a `badgeId`, their badge number is filled in and nothing else changes. To add badge numbers for everyone, import `employeeId` + `badgeId`. |
 | Assets | `assetType` (needed), optional `assetId` (blank = auto-number from the type's prefix; a type with no prefix needs an ID), `model`, `imei`, `serial`, `phoneNumber`. New asset types in the file are created. |
-| Admins | `email`, `name`, optional `role` (`admin` or `station`). Each person is emailed a link to set their own password. |
+| Admins | `email`, `name`, `employeeId` (needed for admins; they're added to staff too), optional `badgeId`, optional `role` (`admin` or `station`). Each person is emailed a link to set their own password. |
 
 ## Equipment
 USB barcode scanner in keyboard mode that sends Enter; thermal label printer (Code 128; 2.25×1.25 in is common) or plain paper; badges must carry a barcode (magstripe/RFID need a different reader); any computer with Chrome/Edge.

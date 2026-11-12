@@ -12,6 +12,21 @@ service cloud.firestore {
     function isStation() { return signedIn() && exists(stationPath()) && get(stationPath()).data.active == true; }
     function isOperator() { return isAdmin() || isStation(); }
 
+    // An admin can also be a staff member: their admin record carries the employee ID they check out under.
+    // Admins may not change their OWN staff record, the device they are holding, or their own admin entry
+    // (other admins can). Their check-out / check-in history is immutable for everyone.
+    function myEmpId() { return get(adminPath()).data.get('employeeId', null); }
+    function notMyStaff(id) { return myEmpId() == null || myEmpId() != id; }
+    function notHeldByMe(holder) { return myEmpId() == null || holder != myEmpId(); }
+    // A new admin may link their own login to a staff record once (while unlinked), and change nothing else.
+    function selfLink() {
+      let keys = request.resource.data.diff(resource.data).affectedKeys();
+      return keys.hasOnly(['employeeId', 'updatedAt', 'auditId'])
+        && resource.data.get('employeeId', null) == null
+        && request.resource.data.employeeId is string
+        && request.resource.data.employeeId.size() > 0;
+    }
+
     // ── No footprint, no change ─────────────────────────────────────
     // Every admin write must carry an `auditId` pointing at an auditLog
     // entry created in the SAME batch, by the same admin, for the same record.
@@ -56,14 +71,14 @@ service cloud.firestore {
     match /staff/{id} {
       allow read: if isOperator();
       allow create: if isAdmin() && audited('staff', id);
-      allow update: if (isAdmin() && audited('staff', id)) || stationPinSet();
+      allow update: if (isAdmin() && audited('staff', id) && notMyStaff(id)) || stationPinSet();
       allow delete: if false;                       // staff are deactivated, never erased
     }
 
     match /assets/{id} {
       allow read: if isOperator();
       allow create: if isAdmin() && audited('asset', id);
-      allow update: if (isAdmin() && audited('asset', id)) || stationUpdate(id);
+      allow update: if (isAdmin() && audited('asset', id) && notHeldByMe(resource.data.get('currentHolderId', null))) || stationUpdate(id);
       allow delete: if false;                       // assets are retired, never erased
     }
 
@@ -143,8 +158,9 @@ service cloud.firestore {
     match /admins/{uid} {
       allow get: if signedIn() && (request.auth.uid == uid || isAdmin());
       allow list: if isAdmin();
-      allow create, update: if isAdmin() && audited('admin', uid)
-        && (uid != request.auth.uid || request.resource.data.active == true);   // can't deactivate yourself
+      allow create: if isAdmin() && audited('admin', uid) && uid != request.auth.uid;
+      allow update: if isAdmin() && audited('admin', uid)
+        && (uid != request.auth.uid || selfLink());   // you can't edit or deactivate your own admin entry
       allow delete: if false;
     }
 

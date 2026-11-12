@@ -37,6 +37,12 @@ let recentTimer = null;
 
 const commit = (ops, batchId = null) => commitAudited(me, ops, batchId);
 
+// An admin can also be a staff member (their admin entry carries the employee ID they check out under).
+// Admins can't change their own staff record or the devices they hold. Another admin has to.
+const myEmpId = () => cache.admins.find((a) => a.id === me?.uid)?.employeeId || me?.employeeId || null;
+const isMyStaff = (id) => !!id && id === myEmpId();
+const SELF_MSG = "That's your own record, so another admin has to change it. (Your check-out history can't be edited by anyone.)";
+
 // ═════════════════════════ views & dialogs ═════════════════════════
 function showView(which) {
   for (const id of ["setup", "login", "app"]) $("#" + id).classList.toggle("hidden", id !== which);
@@ -153,6 +159,7 @@ function boot() {
     startListeners();
     initDates();
     showTab((location.hash || "#dashboard").slice(1));
+    offerStaffLink();
 
     const key = "audit-login-" + me.uid;
     if (!sessionStorage.getItem(key)) {
@@ -162,6 +169,20 @@ function boot() {
       } catch (e) { console.warn("login audit failed", e); }
     }
   });
+}
+
+/** If this admin isn't on the staff list yet, offer to add them (once per sign-in, once the data has loaded). */
+function offerStaffLink() {
+  const key = "offered-staff-link-" + me.uid;
+  try { if (sessionStorage.getItem(key)) return; } catch { /* ignore */ }
+  const tryOffer = setInterval(() => {
+    const self = cache.admins.find((a) => a.id === me.uid);
+    if (!self) return;
+    clearInterval(tryOffer);
+    try { sessionStorage.setItem(key, "1"); } catch { /* ignore */ }
+    if (!self.employeeId && !$("#dlg").open) linkStaffDialog(self);
+  }, 400);
+  setTimeout(() => clearInterval(tryOffer), 10000);
 }
 
 $("#loginForm").addEventListener("submit", async (e) => {
@@ -485,6 +506,10 @@ const staffCreateOp = (r) => ({
   data: { name: r.name, badgeId: r.badgeId || "", active: true, createdAt: now(), updatedAt: now() },
   audit: { action: "staff.create", targetType: "staff", targetId: r.id, summary: `Added staff member ${r.name} (${r.id})${r.badgeId ? `, badge ${r.badgeId}` : ""}`, before: null, after: { name: r.name, badgeId: r.badgeId || "" } },
 });
+const adminLinkOp = (a, employeeId) => ({
+  ref: F.doc(db, "admins", a.id), mode: "update", data: { employeeId, updatedAt: now() },
+  audit: { action: "admin.link_staff", targetType: "admin", targetId: a.id, summary: `Linked admin ${a.name || a.email} to staff ID ${employeeId}`, before: { employeeId: a.employeeId || null }, after: { employeeId } },
+});
 const staffBadgeOp = (s, badgeId) => ({
   ref: F.doc(db, "staff", s.id), mode: "update", data: { badgeId, updatedAt: now() },
   audit: { action: "staff.update", targetType: "staff", targetId: s.id, summary: `${badgeId ? (s.badgeId ? "Changed" : "Added") : "Cleared"} badge number for ${s.name} (${s.id})${badgeId ? `: ${badgeId}` : ""}`, before: { badgeId: s.badgeId || "" }, after: { badgeId } },
@@ -561,6 +586,7 @@ $("#assetsBody").addEventListener("click", async (e) => {
   if (!btn) return;
   const a = cache.assets.find((x) => x.id === btn.closest("tr").dataset.id);
   if (!a) return;
+  if (isMyStaff(a.currentHolderId) && ["edit", "remove"].includes(btn.dataset.act)) return toast(`${a.id} is checked out to you. Scan it at the station to return it, or ask another admin.`, "err", 6000);
   try {
     if (btn.dataset.act === "edit") assetForm(a);
     if (btn.dataset.act === "return") await forceReturn(a);
@@ -715,6 +741,7 @@ async function setActive(kind, rec, active) {
 
 async function forceReturn(a) {
   if (!a) return;
+  if (isMyStaff(a.currentHolderId)) return toast(`${a.id} is checked out to you. Scan it at the station to return it, or ask another admin.`, "err", 6000);
   const ok = await confirmDlg({
     title: `Force return ${a.id}?`, confirm: "Mark as returned",
     message: `${esc(a.id)} is checked out to <b>${esc(a.currentHolderName)}</b>. Use this when a device came back without being scanned. It's recorded in the log and the changelog.`,
@@ -757,17 +784,18 @@ function renderStaff() {
     ? rows.map((s) => {
         const held = cache.assets.filter((a) => a.active && a.status === "out" && a.currentHolderId === s.id).map((a) => a.id);
         const open = cache.alerts.filter((a) => a.missedById === s.id).length;
+        const mine = isMyStaff(s.id);
         return `<tr class="${s.active ? "" : "dim"}" data-id="${esc(s.id)}">
           <td><input type="checkbox" data-sel ${selectedStaff.has(s.id) ? "checked" : ""} ${s.active ? "" : "disabled"} /></td>
-          <td class="mono"><b>${esc(s.id)}</b></td><td class="mono">${s.badgeId ? esc(s.badgeId) : '<span class="muted">—</span>'}</td><td>${esc(s.name)}${open ? ` <span class="chip warn" title="Open alerts">${open} alert${open > 1 ? "s" : ""}</span>` : ""}</td>
+          <td class="mono"><b>${esc(s.id)}</b></td><td class="mono">${s.badgeId ? esc(s.badgeId) : '<span class="muted">—</span>'}</td><td>${esc(s.name)}${mine ? ' <span class="chip blue" title="Your own record. Another admin edits it.">you</span>' : ""}${open ? ` <span class="chip warn" title="Open alerts">${open} alert${open > 1 ? "s" : ""}</span>` : ""}</td>
           <td>${s.active ? '<span class="chip in">Active</span>' : '<span class="chip off">Removed</span>'}</td>
           <td>${pinCell(s)}</td>
           <td>${held.length ? held.map((h) => `<span class="chip out">${esc(h)}</span>`).join(" ") : '<span class="muted">—</span>'}</td>
           <td class="actions">
             ${s.active ? `<a class="btn sm" target="_blank" href="print.html?kind=staff&ids=${encodeURIComponent(s.id)}">Print barcode</a>` : ""}
-            <button class="btn sm" data-act="edit">Edit</button>
+            ${mine ? '<span class="muted" title="Another admin has to change your own record">locked</span>' : `<button class="btn sm" data-act="edit">Edit</button>
             <button class="btn sm" data-act="pin">PIN…</button>
-            ${s.active ? '<button class="btn sm danger" data-act="remove">Remove</button>' : '<button class="btn sm" data-act="restore">Restore</button>'}
+            ${s.active ? '<button class="btn sm danger" data-act="remove">Remove</button>' : '<button class="btn sm" data-act="restore">Restore</button>'}`}
           </td></tr>`;
       }).join("")
     : emptyRow(8, cache.staff.length ? "No staff match." : "No staff yet. Add someone or import a spreadsheet.");
@@ -802,6 +830,7 @@ $("#staffBody").addEventListener("click", async (e) => {
   if (!btn) return;
   const s = cache.staff.find((x) => x.id === btn.closest("tr").dataset.id);
   if (!s) return;
+  if (isMyStaff(s.id)) return toast(SELF_MSG, "err", 6000);
   try {
     if (btn.dataset.act === "edit") staffForm(s);
     if (btn.dataset.act === "pin") pinDialog(s);
@@ -985,10 +1014,10 @@ function importAdminsDialog() {
   const d = $("#dlg");
   d.onclose = null;
   d.innerHTML = `<h2>Import admins from a spreadsheet</h2>
-    <p class="muted" style="margin-top:0">${fileNote} Columns: <b>email</b>, <b>name</b>, and optionally <b>role</b> (admin or station; blank = admin). Each person gets an email to set their own password. They can then sign in at the admin page.</p>
+    <p class="muted" style="margin-top:0">${fileNote} Columns: <b>email</b>, <b>name</b>, <b>employeeId</b> (admins are added to the staff list too), and optionally <b>badgeId</b> and <b>role</b> (admin or station; blank = admin). Each person gets an email to set their own password. They can then sign in at the admin page.</p>
 <div class="row" style="margin:-4px 0 12px"><span class="muted">Need a blank to fill in?</span><button class="btn sm" type="button" id="tplXlsx">Download Excel template</button><button class="btn sm" type="button" id="tplCsv">Download CSV template</button></div>
         <label class="f">Spreadsheet file<input type="file" id="impFile" accept="${FILE_ACCEPT}" /></label>
-    <label class="f" style="margin-top:10px">…or paste rows<textarea id="impText" placeholder="email,name,role\njordan@example.org,Jordan Lee,admin"></textarea></label>
+    <label class="f" style="margin-top:10px">…or paste rows<textarea id="impText" placeholder="email,name,role,employeeId,badgeId\njordan@example.org,Jordan Lee,admin,10234,1002340077"></textarea></label>
     <div id="impPreview" style="margin-top:12px"></div>
     <div class="foot"><button class="btn ghost" id="impClose">Close</button><button class="btn" id="impPrev">Preview</button><button class="btn primary" id="impGo" disabled>Create logins</button></div>`;
   let parsed = null, fileRows = null;
@@ -1006,7 +1035,12 @@ function importAdminsDialog() {
 
   function preview() {
     const existing = new Set([...cache.admins, ...cache.stations].map((x) => String(x.email || "").toLowerCase()));
-    parsed = parseAdminImport(rowsNow(), { existingEmails: existing });
+    parsed = parseAdminImport(rowsNow(), {
+      existingEmails: existing,
+      existingIds: new Set([...cache.assets.map((x) => x.id), ...cache.staff.map((x) => x.id), ...cache.staff.map((x) => x.badgeId).filter(Boolean)]),
+      existingStaff: new Set(cache.staff.map((x) => x.id)),
+      linkedStaff: new Set(cache.admins.map((x) => x.employeeId).filter(Boolean)),
+    });
     const box = $("#impPreview");
     if (parsed.fatal) { box.innerHTML = `<div class="notice">${esc(parsed.fatal)}</div>`; $("#impGo").disabled = true; return; }
     const errs = parsed.errors.slice(0, 15).map((x) => `<li>Row ${x.line}: ${esc(x.message)}</li>`).join("");
@@ -1040,9 +1074,9 @@ function importAdminsDialog() {
       try {
         await commit([{
           ref: F.doc(db, r.role === "admin" ? "admins" : "stations", uid), mode: "set",
-          data: { email: r.email, name: r.name, active: true, createdAt: now(), createdBy: me.email, updatedAt: now() },
-          audit: { action: `${r.role}.create`, targetType: r.role, targetId: uid, summary: `Created ${r.role} login ${r.name} <${r.email}> (spreadsheet import)`, before: null, after: { email: r.email, name: r.name } },
-        }], batchId);
+          data: { email: r.email, name: r.name, active: true, ...(r.employeeId ? { employeeId: r.employeeId } : {}), createdAt: now(), createdBy: me.email, updatedAt: now() },
+          audit: { action: `${r.role}.create`, targetType: r.role, targetId: uid, summary: `Created ${r.role} login ${r.name} <${r.email}>${r.employeeId ? `, staff ID ${r.employeeId}` : ""} (spreadsheet import)`, before: null, after: { email: r.email, name: r.name, ...(r.employeeId ? { employeeId: r.employeeId } : {}) } },
+        }, ...(r.newStaff ? [staffCreateOp({ id: r.employeeId, name: r.name, badgeId: r.badgeId })] : [])], batchId);
       } catch (err) { failed.push(`${r.email}: login created but not activated (${explain(err)})`); continue; }
       try { await A.sendPasswordResetEmail(auth, r.email); } catch { failed.push(`${r.email}: created, but the password email didn't send. Use “Send password reset” on the Admins tab.`); }
       done++;
@@ -1185,15 +1219,60 @@ function renderReport() {
 }
 
 // ═════════════════════════ admins & station logins ═════════════════════════
+/** Put an admin on the staff list (or link them to a staff record that already exists) so they can check devices out. */
+function linkStaffDialog(adminRec) {
+  const own = adminRec.id === me.uid;
+  formDialog({
+    title: own ? "Add yourself to the staff list" : `Add ${adminRec.name || adminRec.email} to the staff list`,
+    submit: "Add to staff",
+    body: `<p class="muted" style="margin-top:0">${own ? "This lets you scan your badge or type your employee ID at the check-out station like everyone else. " : "This lets them check devices out like any other staff member. "}Once linked, ${own ? "you" : "they"} can't edit ${own ? "your" : "their"} own staff record or force-return a device ${own ? "you're" : "they're"} holding; another admin has to. ${own ? "That's a one-time step." : ""}</p>
+      <div class="form-grid">
+        <label class="f">Employee ID<input name="id" required inputmode="text" /></label>
+        <label class="f">Badge number <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="badge" inputmode="text" /></label>
+        <label class="f" style="grid-column:1/-1">Full name<input name="name" required value="${esc(adminRec.name || "")}" /></label></div>`,
+    onSubmit: async (fd) => {
+      const id = norm(fd.get("id")), badge = norm(fd.get("badge")), name = str(fd, "name");
+      if (!name) throw new Error("Enter the person's name.");
+      if (!validId(id)) throw new Error("Employee ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
+      const ops = await adminStaffOps(adminRec, id, badge, name);
+      await commit(ops);
+      toast(`${adminRec.name || adminRec.email} is now on the staff list as ${id}`, "ok");
+    },
+  });
+}
+
+/** Checks, then returns the ops that link an existing admin to staff ID `id` (creating the staff record if there isn't one). */
+async function adminStaffOps(adminRec, id, badge, name) {
+  const taken = cache.admins.find((x) => x.employeeId === id && x.id !== adminRec.id);
+  if (taken) throw new Error(`Employee ID ${id} already belongs to admin ${taken.name || taken.email}.`);
+  const existing = cache.staff.find((x) => x.id === id);
+  const ops = [];
+  if (existing) {
+    if (badge && badge !== existing.badgeId) throw new Error(`${id} is already on the staff list (${existing.name}). Leave the badge number blank, or change it from the Staff tab.`);
+  } else {
+    const owner = idOwner(id);
+    if (owner) throw new Error(`“${id}” is already used by ${owner}.`);
+    if (badge) {
+      if (badge === id) throw new Error("The badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.");
+      const bo = idOwner(badge);
+      if (bo) throw new Error(`Badge number “${badge}” is already used by ${bo}.`);
+    }
+    ops.push(staffCreateOp({ id, name, badgeId: badge }));
+  }
+  ops.push(adminLinkOp(adminRec, id));
+  return ops;
+}
+
 function renderAdmins() {
   const rowFor = (kind) => (u) => {
     const self = kind === "admin" && u.id === me.uid;
     return `<tr class="${u.active ? "" : "dim"}" data-id="${esc(u.id)}" data-kind="${kind}">
-      <td><b>${esc(u.name || "—")}</b>${self ? ' <span class="chip blue">you</span>' : ""}</td><td>${esc(u.email)}</td>
+      <td><b>${esc(u.name || "—")}</b>${self ? ' <span class="chip blue">you</span>' : ""}${kind === "admin" ? (u.employeeId ? `<div class="sub">Staff ID <span class="mono">${esc(u.employeeId)}</span></div>` : '<div class="sub">Not on the staff list yet</div>') : ""}</td><td>${esc(u.email)}</td>
       <td>${u.active ? '<span class="chip in">Active</span>' : '<span class="chip off">Deactivated</span>'}</td>
       <td>${fmtDT(u.createdAt)}${u.createdBy ? `<div class="sub">by ${esc(u.createdBy)}</div>` : ""}</td>
       <td class="actions">
         ${kind === "admin" ? '<button class="btn sm" data-act="activity">View activity</button>' : ""}
+        ${kind === "admin" && !u.employeeId ? '<button class="btn sm primary" data-act="link">Add to staff</button>' : ""}
         <button class="btn sm" data-act="reset">Send password reset</button>
         ${self ? "" : u.active ? '<button class="btn sm danger" data-act="deactivate">Deactivate</button>' : '<button class="btn sm" data-act="reactivate">Reactivate</button>'}
       </td></tr>`;
@@ -1210,6 +1289,7 @@ $("#tab-admins").addEventListener("click", async (e) => {
   const u = (kind === "admin" ? cache.admins : cache.stations).find((x) => x.id === tr.dataset.id);
   if (!u) return;
   try {
+    if (btn.dataset.act === "link") return linkStaffDialog(u);
     if (btn.dataset.act === "activity") { $("#cAdmin").value = u.id; showTab("changelog"); $("#cAdmin").value = u.id; return runChangelog(); }
     if (btn.dataset.act === "reset") {
       await A.sendPasswordResetEmail(auth, u.email);
@@ -1236,11 +1316,26 @@ $("#addAdmin").addEventListener("click", () =>
       <label class="f">Type<select name="role"><option value="admin">Administrator (full access)</option><option value="station">Station login (scan screen only)</option></select></label>
       <label class="f">Name or label<input name="name" required placeholder="e.g. Jordan Lee / Dispatch desk" /></label>
       <label class="f">Email<input name="email" type="email" required autocomplete="off" /></label>
-      <label class="f">Temporary password<input name="pw" type="text" required minlength="8" autocomplete="off" placeholder="8+ characters" /></label></div>
-      <p class="muted" style="font-size:13px;margin-bottom:0">Share the temporary password privately. They can change it any time with “Send password reset”.</p>`,
+      <label class="f">Temporary password<input name="pw" type="text" required minlength="8" autocomplete="off" placeholder="8+ characters" /></label>
+      <label class="f" id="adminEmpWrap">Employee ID <span class="muted" style="text-transform:none;font-weight:400">(they're added to staff too)</span><input name="empId" inputmode="text" /></label>
+      <label class="f" id="adminBadgeWrap">Badge number <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="badge" inputmode="text" /></label></div>
+      <p class="muted" style="font-size:13px;margin-bottom:0">Share the temporary password privately. They can change it any time with “Send password reset”. Administrators are also added to the staff list so they can check devices out; they can't edit their own staff record or devices they hold.</p>`,
+    onOpen: (d) => {
+      const sync = () => { const isAdmin = $("[name=role]", d).value === "admin"; $("#adminEmpWrap", d).classList.toggle("hidden", !isAdmin); $("#adminBadgeWrap", d).classList.toggle("hidden", !isAdmin); };
+      $("[name=role]", d).addEventListener("change", sync);
+      sync();
+    },
     onSubmit: async (fd) => {
       const role = str(fd, "role"), name = str(fd, "name"), email = str(fd, "email").toLowerCase(), pw = String(fd.get("pw") || "");
       if (pw.length < 8) throw new Error("Password must be at least 8 characters.");
+      // Check the staff details BEFORE creating the login, so a typo doesn't leave a half-made account behind.
+      let empId = "", badge = "", staffOps = [];
+      if (role === "admin") {
+        empId = norm(fd.get("empId")); badge = norm(fd.get("badge"));
+        if (!empId) throw new Error("Enter their employee ID so they're added to the staff list too.");
+        if (!validId(empId)) throw new Error("Employee ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
+        staffOps = (await adminStaffOps({ id: "(new)", name, email }, empId, badge, name)).filter((o) => o.ref.path.startsWith("staff/"));
+      }
 
       // Create the login on a throw-away second app instance so this admin stays signed in.
       const second = appMod.initializeApp(firebaseConfig, "acct-" + Date.now());
@@ -1256,9 +1351,9 @@ $("#addAdmin").addEventListener("click", () =>
       try {
         await commit([{
           ref: F.doc(db, kind === "admin" ? "admins" : "stations", uid), mode: "set",
-          data: { email, name, active: true, createdAt: now(), createdBy: me.email, updatedAt: now() },
-          audit: { action: `${kind}.create`, targetType: kind, targetId: uid, summary: `Created ${kind} login ${name} <${email}>`, before: null, after: { email, name } },
-        }]);
+          data: { email, name, active: true, ...(empId ? { employeeId: empId } : {}), createdAt: now(), createdBy: me.email, updatedAt: now() },
+          audit: { action: `${kind}.create`, targetType: kind, targetId: uid, summary: `Created ${kind} login ${name} <${email}>${empId ? `, staff ID ${empId}` : ""}`, before: null, after: { email, name, ...(empId ? { employeeId: empId } : {}) } },
+        }, ...staffOps]);
       } catch (err) {
         throw new Error(`The login was created but couldn't be activated (${explain(err)}). Try adding the same email again after deleting it in Firebase Console → Authentication.`);
       }
@@ -1343,6 +1438,7 @@ $("#cExport").addEventListener("click", () => {
  *  (it's gone): that also logs it as returned-by-admin so the holder isn't blamed forever. */
 function outOfServiceOps(a, reason, note) {
   const isOut = a.status === "out";
+  if (isMyStaff(a.currentHolderId)) throw new Error(`${a.id} is checked out to you. Scan it at the station to return it, or ask another admin to change it.`);
   if (isOut && !["lost", "stolen"].includes(reason))
     throw new Error(`${a.id} is checked out to ${a.currentHolderName}. Force return it first, or choose Lost or Stolen.`);
   const label = reasonLabel(reason);
@@ -1458,7 +1554,7 @@ function pinDialog(s) {
 }
 
 async function bulkPinRequired(required) {
-  const people = cache.staff.filter((x) => x.active && selectedStaff.has(x.id) && !!x.pinRequired !== required);
+  const people = cache.staff.filter((x) => x.active && selectedStaff.has(x.id) && !isMyStaff(x.id) && !!x.pinRequired !== required);
   if (!people.length) return toast(required ? "They already require a PIN." : "None of them require a PIN.", "info");
   const batchId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
   try {
