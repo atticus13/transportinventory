@@ -3,7 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep, eidFromBadge } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=16";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=17";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -590,7 +590,7 @@ function boot() {
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#lErr").textContent = "";
-  try { await A.signInWithEmailAndPassword(auth, $("#lEmail").value.trim(), $("#lPass").value); }
+  try { await A.signInWithEmailAndPassword(auth, $("#lEmail").value.trim().toLowerCase(), $("#lPass").value); }
   catch (err) { $("#lErr").textContent = friendlyAuthError(err); }
 });
 $("#signOut").addEventListener("click", () => { if (window.confirm("Sign this station out? Someone will need the station email and password to sign it in again.")) A.signOut(auth); });

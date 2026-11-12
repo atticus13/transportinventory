@@ -14,7 +14,7 @@ export { A, F, appMod, firebaseConfig };
 export function friendlyAuthError(e) {
   const c = e?.code || "";
   if (c.includes("invalid-credential") || c.includes("wrong-password") || c.includes("user-not-found") || c.includes("invalid-email"))
-    return "Email or password is incorrect.";
+    return "Email or password is incorrect. Check for capital letters, extra spaces and look-alike characters (0/O, 1/l).";
   if (c.includes("too-many-requests")) return "Too many attempts. Wait a minute and try again.";
   if (c.includes("network")) return "Can't reach the server. Check the internet connection.";
   if (c.includes("email-already-in-use")) return "That email already has a login. Use “Send password reset” or pick a different email.";

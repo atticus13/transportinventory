@@ -8,7 +8,7 @@ import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
 import { classifyScan, summarizeCount } from "./inventory-logic.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=16";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=17";
 import { staleStaff, worthChecking, snoozeUntil, STALE_DAYS, SNOOZE_DAYS } from "./stale-logic.js";
 
 const REPORT_MAX = 5000;
@@ -190,7 +190,7 @@ function offerStaffLink() {
 $("#loginForm").addEventListener("submit", async (e) => {
   e.preventDefault();
   $("#lErr").textContent = "";
-  try { await A.signInWithEmailAndPassword(auth, $("#lEmail").value.trim(), $("#lPass").value); }
+  try { await A.signInWithEmailAndPassword(auth, $("#lEmail").value.trim().toLowerCase(), $("#lPass").value); }
   catch (err) { $("#lErr").textContent = friendlyAuthError(err); }
 });
 $("#forgotBtn").addEventListener("click", async () => {
@@ -1195,12 +1195,12 @@ function importAdminsDialog() {
   $("#impPrev").onclick = preview;
 
   function preview() {
-    const existing = new Set([...cache.admins, ...cache.stations].map((x) => String(x.email || "").toLowerCase()));
+    const existing = new Set([...cache.admins, ...cache.stations].filter((x) => x.active !== false).map((x) => String(x.email || "").toLowerCase()));   // a deactivated login can be added again (after deleting it in the Firebase console)
     parsed = parseAdminImport(rowsNow(), {
       existingEmails: existing,
       existingIds: new Set([...cache.assets.map((x) => x.id), ...cache.staff.map((x) => x.id), ...cache.staff.map((x) => x.badgeId).filter(Boolean)]),
       existingStaff: new Set(cache.staff.map((x) => x.id)),
-      linkedStaff: new Set(cache.admins.map((x) => x.employeeId).filter(Boolean)),
+      linkedStaff: new Set(cache.admins.filter((x) => x.active !== false).map((x) => x.employeeId).filter(Boolean)),
     });
     const box = $("#impPreview");
     if (parsed.fatal) { box.innerHTML = `<div class="notice">${esc(parsed.fatal)}</div>`; $("#impGo").disabled = true; return; }
@@ -1403,7 +1403,7 @@ function linkStaffDialog(adminRec) {
 
 /** Checks, then returns the ops that link an existing admin to staff ID `id` (creating the staff record if there isn't one). */
 async function adminStaffOps(adminRec, id, name) {
-  const taken = cache.admins.find((x) => x.employeeId === id && x.id !== adminRec.id);
+  const taken = cache.admins.find((x) => x.employeeId === id && x.id !== adminRec.id && x.active !== false);   // a deactivated admin no longer holds the ID
   if (taken) throw new Error(`Employee ID ${id} already belongs to admin ${taken.name || taken.email}.`);
   const existing = cache.staff.find((x) => x.id === id);
   const ops = [];
@@ -1472,7 +1472,7 @@ $("#addAdmin").addEventListener("click", () =>
       <label class="f">Type<select name="role"><option value="admin">Administrator (full access)</option><option value="station">Station login (scan screen only)</option></select></label>
       <label class="f">Name or label<input name="name" required placeholder="e.g. Jordan Lee / Dispatch desk" /></label>
       <label class="f">Email<input name="email" type="email" required autocomplete="off" /></label>
-      <label class="f">Temporary password<input name="pw" type="text" required minlength="8" autocomplete="off" placeholder="8+ characters" /></label>
+      <label class="f">Temporary password<input name="pw" type="text" required minlength="8" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" placeholder="8+ characters, no spaces" /></label>
       <label class="f" id="adminEmpWrap">Employee ID <span class="muted" style="text-transform:none;font-weight:400">(they're added to staff too)</span><input name="empId" inputmode="text" /></label></div>
       <p class="muted" style="font-size:13px;margin-bottom:0">Share the temporary password privately. They can change it any time with “Send password reset”. Administrators are also added to the staff list so they can check devices out; they can't edit their own staff record or devices they hold.</p>`,
     onOpen: (d) => {
@@ -1482,6 +1482,7 @@ $("#addAdmin").addEventListener("click", () =>
     },
     onSubmit: async (fd) => {
       const role = str(fd, "role"), name = str(fd, "name"), email = str(fd, "email").toLowerCase(), pw = String(fd.get("pw") || "");
+      if (/\s/.test(pw)) throw new Error("The temporary password can't contain spaces.");
       if (pw.length < 8) throw new Error("Password must be at least 8 characters.");
       // Check the staff details BEFORE creating the login, so a typo doesn't leave a half-made account behind.
       let empId = "", staffOps = [];
