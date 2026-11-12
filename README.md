@@ -105,10 +105,10 @@ Station → **Kiosk** button: fullscreen, screen kept awake, remembered on that 
 
 ## Admin portal
 Dashboard · Alerts · Assets · Staff · Inventory · Shift sweep · Reports · Admins · Changelog · Settings.
-Bulk label printing with saved templates is in Assets/Staff (tick rows → **Print N labels…**). CSV import for staff (`employeeId,name`) and assets (`assetId,assetType,model,imei,serial,phoneNumber`). "Remove" never erases anything; history is kept.
+Bulk label printing with saved templates is in Assets/Staff (tick rows → **Print N labels…**). CSV import for staff (`employeeId,name`) and assets (`assetType,model,imei,serial,phoneNumber`). "Remove" never erases anything; history is kept.
 
 ## Admin portal notes
-- **Asset types** (*Assets → Asset types…*): categories such as Rover phone, iPad or Fob. The **ID prefix is optional**. It only starts the *suggested* next ID when you add an item: prefix `R` with 0 digits suggests `R1, R2, R3…`; prefix `PH-` with 3 digits suggests `PH-001`; no prefix means you type each ID. You can always type any ID. Each type also chooses which detail fields apply, so a **Fob** can have none. Every detail field (model, IMEI, serial, phone number) is optional.
+- **Asset types** (*Assets → Asset types…*) is the only place to add a new kind of item (Rover phone, iPad, Fob). Give it a name, optional **ID letters** (e.g. `S` for Supervisor phone) and tick which detail fields apply, so a **Fob** can have none. **Add asset** then starts with "What kind of item is this?"; once you pick a type it fills in the barcode ID for you: the letters plus the next number after the highest one already used, always 3 digits (`S001`, `S002`, … `S010`), starting at `001` for a new type. A type with no letters means you type each ID. You can change the suggested ID, but one that is already taken is flagged and refused. **Add & add another** saves and keeps the form open on the next ID. Every detail field (model, phone number, IMEI, serial) is optional.
 - **One of each kind:** a person can hold one device *per type* at a time, so a rover phone and a fob together is fine, two rover phones is not.
 - **Staff** have an employee ID, an optional badge number, and a name.
 - **Admins are staff too.** Every administrator is also on the staff list (they have an employee ID and optional badge number), so they can scan out a phone or fob like anyone else. The first time an existing admin signs in after this update they're asked for their employee ID; new admins (added one at a time or by spreadsheet) need an employee ID up front. A still-unlinked admin shows an **Add to staff** button on the Admins tab.
@@ -121,7 +121,7 @@ Bulk label printing with saved templates is in Assets/Staff (tick rows → **Pri
 | Import | Columns |
 |---|---|
 | Staff | `employeeId`, `name` (or `firstName` + `lastName`), optional `badgeId`. If the employee already exists and the row has a `badgeId`, their badge number is filled in and nothing else changes. To add badge numbers for everyone, import `employeeId` + `badgeId`. |
-| Assets | `assetType` (needed), optional `assetId` (blank = auto-number from the type's prefix; a type with no prefix needs an ID), `model`, `imei`, `serial`, `phoneNumber`. New asset types in the file are created. |
+| Assets | `assetType` (needed; must already exist under Assets → Asset types, otherwise the row is skipped) and optional `model`, `imei`, `serial`, `phoneNumber`. **No ID column is needed:** each device is numbered from its type's ID letters with the lowest free number (R001, R002, R003…). Add an `assetId` column only to pick a specific barcode, or for a type with no ID letters. |
 | Admins | `email`, `name`, `employeeId` (needed for admins; they're added to staff too), optional `badgeId`, optional `role` (`admin` or `station`). Each person is emailed a link to set their own password. |
 
 ## Equipment

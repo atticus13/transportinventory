@@ -161,14 +161,16 @@ test("staff import: first/last name columns", () => {
 test("staff import: missing id column is fatal", () => {
   assert.ok(parseImport("staff", parseCSV("name\nJane")).fatal);
 });
-test("asset import: types, models, auto-numbering per type prefix", () => {
-  const csv = "assetId,assetType,model,IMEI,Serial Number,Phone Number\nPH-010,Phone,iPhone 13,356,SN1,352-555-0101\n,Phone,Galaxy,357,SN2,352-555-0102\n,iPad,iPad 10th,,SN3,\n,iPad,iPad 10th,,SN4,";
+test("asset import: no ID column needed; types must exist; numbers are the lowest free per type", () => {
+  const csv = "assetType,model,IMEI,Serial Number,Phone Number\nPhone,iPhone 13,356,SN1,352-555-0101\nPhone,Galaxy,357,SN2,352-555-0102\niPad,iPad 10th,,SN3,\niPad,iPad 10th,,SN4,\nPhne,Typo,,,";
   const { records, errors, newTypes } = parseImport("asset", parseCSV(csv), {
-    existingIds: new Set(["PH-004"]), pad: 3, knownTypes: [{ name: "Phone", prefix: "PH-" }],
+    existingIds: new Set(["PH-001", "PH-002", "PH-004"]), pad: 3, knownTypes: [{ name: "Phone", prefix: "PH-" }, { name: "iPad", prefix: "IP-" }],
   });
-  assert.equal(errors.length, 0);
-  assert.deepEqual(records.map((r) => r.id), ["PH-010", "PH-011", "IP-001", "IP-002"]);
-  assert.deepEqual(newTypes, ["iPad"]);
+  // PH-003 is free, so it is used before PH-005
+  assert.deepEqual(records.map((r) => r.id), ["PH-003", "PH-005", "IP-001", "IP-002"]);
+  assert.deepEqual(newTypes, []);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /no asset type “Phne”.*Asset types/);
   assert.equal(records[0].serial, "SN1");
   assert.equal(records[0].assetType, "Phone");
   assert.equal(records[1].phoneNumber, "352-555-0102");
@@ -380,12 +382,12 @@ test("summarize counts badge vs employee-ID check-outs and returns per person", 
 });
 
 // ───────── optional prefixes, per-type numbering, fobs ─────────
-test("asset import: per-type digits (R1, R2) and no-prefix types need explicit IDs", () => {
-  const knownTypes = [{ name: "Rover phone", prefix: "R", pad: 0 }, { name: "Fob", prefix: "", pad: 0 }, { name: "iPad", prefix: "IP-", pad: 3 }];
-  const { records, errors } = parseImport("asset", parseCSV("assetId,assetType\nR1,Rover phone\n,Rover phone\n,Rover phone\n,iPad\nFOB-A,Fob\n,Fob"), { knownTypes });
-  assert.deepEqual(records.map((r) => r.id), ["R1", "FOB-A", "R2", "R3", "IP-001"]);
+test("asset import: explicit IDs still work and are skipped over; types with no letters need an ID", () => {
+  const knownTypes = [{ name: "Rover phone", prefix: "R", pad: 3 }, { name: "Fob", prefix: "", pad: 3 }, { name: "iPad", prefix: "IP-", pad: 3 }];
+  const { records, errors } = parseImport("asset", parseCSV("assetType,assetId\nRover phone,R001\nRover phone,\nRover phone,\niPad,\nFob,FOB-A\nFob,"), { knownTypes });
+  assert.deepEqual(records.map((r) => r.id), ["R001", "FOB-A", "R002", "R003", "IP-001"]);
   assert.equal(errors.length, 1);
-  assert.match(errors[0].message, /no ID prefix/);
+  assert.match(errors[0].message, /no ID letters/);
 });
 test("asset import: only the type is needed (model, IMEI, serial, number all optional)", () => {
   const { records, errors } = parseImport("asset", parseCSV("assetId,assetType\nF1,Fob"), { knownTypes: [{ name: "Fob", prefix: "F", pad: 0 }] });
@@ -427,7 +429,8 @@ test("every template's header row is understood by its importer", () => {
   assert.ok(!parseAdminImport([TEMPLATES.admin.headers]).fatal);
   // a filled-in row round-trips through each template
   assert.equal(parseImport("staff", [TEMPLATES.staff.headers, ["1", "99", "Jane"]]).records[0].badgeId, "99");
-  assert.equal(parseImport("asset", [TEMPLATES.asset.headers, ["R1", "Rover phone", "", "", "", ""]], {}).records[0].id, "R1");
+  assert.equal(parseImport("asset", [TEMPLATES.asset.headers, ["Rover phone", "", "", "", "", "R1"]], { knownTypes: [{ name: "Rover phone", prefix: "R", pad: 3 }] }).records[0].id, "R1");
+  assert.equal(parseImport("asset", [TEMPLATES.asset.headers, ["Rover phone", "", "", "", "", ""]], { knownTypes: [{ name: "Rover phone", prefix: "R", pad: 3 }] }).records[0].id, "R001");
   assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "station", "", ""]]).records[0].role, "station");
   assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "admin", "77", ""]]).records[0].employeeId, "77");
   for (const t of Object.values(TEMPLATES)) assert.ok(t.notes.length > 2 && t.file);

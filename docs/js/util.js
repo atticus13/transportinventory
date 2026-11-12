@@ -135,6 +135,16 @@ export function derivePrefix(name) {
 }
 
 /** Next sequential ID for a prefix, e.g. ("PH-", 3, ["PH-001","PH-004"]) → "PH-005". */
+/** The lowest number not yet used with this prefix, starting at 1 (R001, R002, then R004 if R003 is taken...). */
+export function lowestFreeIdFor(prefix, pad, ids) {
+  const re = new RegExp("^" + escRe(prefix) + "(\\d+)$");
+  const used = new Set();
+  for (const id of ids) { const m = re.exec(id); if (m) used.add(parseInt(m[1], 10)); }
+  let n = 1;
+  while (used.has(n)) n++;
+  return prefix + String(n).padStart(pad, "0");
+}
+
 export function nextIdFor(prefix, pad, ids) {
   const re = new RegExp("^" + escRe(prefix) + "(\\d+)$");
   let max = 0;

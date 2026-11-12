@@ -384,15 +384,19 @@ const typeByName = (n) => cache.types.find((t) => t.name.toLowerCase() === Strin
 // The ID prefix is optional. It only decides how the "next ID" suggestion starts (R → R1, R2…).
 // A type with an empty prefix gets no suggestion: you type each ID yourself.
 const prefixOf = (t) => (typeof t?.prefix === "string" ? t.prefix : derivePrefix(t?.name));
-const padOf = (t) => (Number.isInteger(t?.pad) && t.pad >= 0 && t.pad <= 6 ? t.pad : S.ASSET_ID_PAD);
+// IDs are numbered with 3 digits (S001, S002...), fixed on purpose: there will never be more than 999 of one kind.
+const ID_DIGITS = 3;
+const padOf = () => ID_DIGITS;
 const DETAIL_FIELDS = [["model", "Model"], ["phoneNumber", "Phone number"], ["imei", "IMEI"], ["serial", "Serial number"]];
 const fieldsOf = (t) => (Array.isArray(t?.fields) ? t.fields : DETAIL_FIELDS.map(([k]) => k));
 const PREFIX_RE = /^[A-Z0-9._-]{0,10}$/;
-const nextAssetId = (prefix, pad = S.ASSET_ID_PAD) => nextIdFor(prefix, pad, [...cache.assets.map((a) => a.id), ...cache.staff.map((s) => s.id), ...cache.staff.map((s) => s.badgeId).filter(Boolean)]);
+const takenIds = (extra = []) => [...cache.assets.map((a) => a.id), ...cache.staff.map((x) => x.id), ...cache.staff.map((x) => x.badgeId).filter(Boolean), ...extra];
+/** The next free number after the highest one already used with this prefix (S001 when there is none yet). */
+const nextAssetId = (prefix, extra = []) => nextIdFor(prefix, ID_DIGITS, takenIds(extra));
 const checkedFields = (root) => DETAIL_FIELDS.map(([k]) => k).filter((k) => root.querySelector(`[data-tf="${k}"]`)?.checked);
 const fieldBoxes = (fields) => DETAIL_FIELDS.map(([k, l]) => `<label class="chk"><input type="checkbox" data-tf="${k}" ${fields.includes(k) ? "checked" : ""} /> ${l}</label>`).join(" ");
 
-const typeCreateOp = ({ name, prefix, pad = S.ASSET_ID_PAD, fields = DETAIL_FIELDS.map(([k]) => k) }) => ({
+const typeCreateOp = ({ name, prefix, pad = ID_DIGITS, fields = DETAIL_FIELDS.map(([k]) => k) }) => ({
   ref: F.doc(db, "assetTypes", slugify(name)), mode: "set",
   data: { name, prefix, pad, fields, active: true, createdAt: now(), updatedAt: now() },
   audit: { action: "assetType.create", targetType: "assetType", targetId: slugify(name), summary: `Created asset type “${name}”${prefix ? ` (IDs start ${prefix})` : " (no ID prefix)"}${fields.length ? "" : " with no extra detail fields"}`, before: null, after: { name, prefix, pad, fields } },
@@ -413,29 +417,45 @@ function typesDialog() {
   d.onclose = null;
   const draw = () => {
     d.innerHTML = `<h2>Asset types</h2>
-      <p class="muted" style="margin-top:0">Categories such as Rover phone, iPad or Fob. The <b>ID prefix</b> is optional: it only starts the suggested ID when you add an item (prefix <span class="mono">R</span> with 0 digits suggests R1, R2, R3…; prefix <span class="mono">PH-</span> with 3 digits suggests PH-001). Leave it empty to type every ID yourself. Tick only the detail fields that make sense for the type. Types are archived, never deleted.</p>
-      <div class="table-wrap"><table><thead><tr><th>Type</th><th>ID prefix</th><th>Digits</th><th>Detail fields</th><th>Active</th><th></th></tr></thead><tbody id="typeRows">
+      <p class="muted" style="margin-top:0">Categories such as Rover phone, iPad or Fob. This is the only place to add a new type. The <b>ID letters</b> are optional: they start the suggested ID when you add an item (letters <span class="mono">S</span> suggest S001, S002, S003…, always the next number after the highest one used). Leave them empty to type every ID yourself. Tick only the detail fields that make sense for the type. Types are archived, never deleted.</p>
+      <div class="table-wrap"><table><thead><tr><th>Type</th><th>ID letters</th><th>Detail fields</th><th>Active</th><th></th></tr></thead><tbody id="typeRows">
       ${cache.types.map((t) => {
         const n = cache.assets.filter((a) => a.active && a.category === t.name).length;
         return `<tr class="${t.active ? "" : "dim"}" data-id="${esc(t.id)}"><td><b>${esc(t.name)}</b>${t.active ? "" : ' <span class="chip off">Archived</span>'}</td>
           <td><input data-prefix class="mono" value="${esc(prefixOf(t))}" placeholder="(none)" style="width:84px;padding:5px 8px" /></td>
-          <td><input data-pad type="number" min="0" max="6" value="${padOf(t)}" style="width:58px;padding:5px 8px" /></td>
           <td style="white-space:normal">${fieldBoxes(fieldsOf(t))}</td><td>${n}</td>
           <td class="actions"><button class="btn sm" data-act="save">Save</button>
           ${t.active ? '<button class="btn sm danger" data-act="archive">Archive</button>' : '<button class="btn sm" data-act="restore">Restore</button>'}</td></tr>`;
-      }).join("") || emptyRow(6, "No asset types yet. Add your first below (e.g. Rover phone).")}</tbody></table></div>
+      }).join("") || emptyRow(5, "No asset types yet. Add your first below (e.g. Rover phone).")}</tbody></table></div>
       <form id="typeForm" style="margin-top:14px">
-        <div class="form-grid" style="grid-template-columns:2fr 1fr 1fr;align-items:end">
-          <label class="f">New type<input name="name" placeholder="e.g. Fob" required /></label>
-          <label class="f">ID prefix (optional)<input name="prefix" placeholder="e.g. F" /></label>
-          <label class="f">Digits<input name="pad" type="number" min="0" max="6" value="0" /></label>
+        <div class="form-grid" style="grid-template-columns:2fr 1fr;align-items:end">
+          <label class="f">New type<input name="name" placeholder="e.g. Supervisor phone" required /></label>
+          <label class="f">ID letters (optional)<input name="prefix" placeholder="e.g. S" /></label>
         </div>
+        <div class="muted" id="typePreview" style="margin:8px 0 0;font-size:13px"></div>
         <div style="margin:10px 0 8px"><span class="muted">Detail fields:</span> ${fieldBoxes(DETAIL_FIELDS.map(([k]) => k))}</div>
         <button class="btn primary" type="submit">Add type</button>
       </form>
       <div class="err-text" id="typeErr" style="margin-top:8px"></div>
       <div class="foot"><button class="btn ghost" id="typeClose">Close</button></div>`;
     $("#typeClose").onclick = () => d.close();
+    // Suggest ID letters from the name until they are typed by hand, and show what the first ID will be.
+    let prefixTouched = false;
+    const tf = $("#typeForm");
+    const preview = () => {
+      const p = norm(tf.elements.prefix.value);
+      const nm = tf.elements.name.value.trim();
+      $("#typePreview").textContent = p ? `The first ${nm || "item"} will be ${nextAssetId(p)}.` : nm ? "No ID letters: you type each ID yourself when you add one." : "";
+    };
+    // First letter of the name (R for Rover phone); two letters if another type already uses that one.
+    const suggestLetters = (name) => {
+      const letters = name.replace(/[^A-Za-z]/g, "").toUpperCase();
+      if (!letters) return "";
+      const used = new Set(cache.types.map((t) => prefixOf(t)));
+      return used.has(letters[0]) ? letters.slice(0, 2) : letters[0];
+    };
+    tf.elements.name.addEventListener("input", () => { if (!prefixTouched) tf.elements.prefix.value = suggestLetters(tf.elements.name.value); preview(); });
+    tf.elements.prefix.addEventListener("input", () => { prefixTouched = true; preview(); });
     $("#typeForm").onsubmit = async (e) => {
       e.preventDefault();
       $("#typeErr").textContent = "";
@@ -446,8 +466,7 @@ function typesDialog() {
         if (cache.types.some((t) => t.id === slugify(name))) throw new Error(`“${name}” already exists.`);
         const prefix = norm(str(fd, "prefix"));
         if (!PREFIX_RE.test(prefix)) throw new Error("Prefix can use letters, numbers, dot, dash, underscore (10 max).");
-        const pad = Math.min(6, Math.max(0, parseInt(str(fd, "pad") || "0", 10) || 0));
-        await commit([typeCreateOp({ name, prefix, pad, fields: checkedFields(e.target) })]);
+        await commit([typeCreateOp({ name, prefix, fields: checkedFields(e.target) })]);
         toast(`Added type ${name}`, "ok");
         draw();
       } catch (err) { $("#typeErr").textContent = explain(err); }
@@ -462,14 +481,13 @@ function typesDialog() {
         if (b.dataset.act === "save") {
           const prefix = norm($("[data-prefix]", tr).value);
           if (!PREFIX_RE.test(prefix)) throw new Error("Prefix can use letters, numbers, dot, dash, underscore (10 max).");
-          const pad = Math.min(6, Math.max(0, parseInt($("[data-pad]", tr).value || "0", 10) || 0));
           const fields = checkedFields(tr);
-          const before = { prefix: prefixOf(t), pad: padOf(t), fields: fieldsOf(t) };
-          const after = { prefix, pad, fields };
+          const before = { prefix: prefixOf(t), fields: fieldsOf(t) };
+          const after = { prefix, fields };
           if (JSON.stringify(before) === JSON.stringify(after)) throw new Error("Nothing changed.");
           await commit([{ ref: F.doc(db, "assetTypes", t.id), mode: "update", data: { ...after, updatedAt: now() },
-            audit: { action: "assetType.update", targetType: "assetType", targetId: t.id, summary: `Changed ${t.name} type settings (prefix “${before.prefix}” → “${prefix}”, ${before.pad} → ${pad} digits, fields: ${fields.join(", ") || "none"})`, before, after } }]);
-          toast("Saved. Prefix and digits apply to newly added items.", "ok");
+            audit: { action: "assetType.update", targetType: "assetType", targetId: t.id, summary: `Changed ${t.name} type settings (ID letters “${before.prefix}” → “${prefix}”, fields: ${fields.join(", ") || "none"})`, before, after } }]);
+          toast("Saved. ID letters apply to newly added items.", "ok");
         } else {
           const active = b.dataset.act === "restore";
           if (!active && cache.assets.some((a) => a.active && a.category === t.name)) throw new Error(`${t.name} still has active assets. Move or remove them first.`);
@@ -614,55 +632,71 @@ function openPrint(kind, ids) {
 function assetForm(existing) {
   const editing = !!existing;
   const types = activeTypes();
-  const startCat = editing ? existing.category || "" : types[0]?.name ?? "__new__";
-  const a = existing || { id: "", category: startCat, model: "", imei: "", serial: "", phoneNumber: "" };
+  if (!editing && !types.length) {
+    return formDialog({
+      title: "Add asset", submit: "Set up asset types",
+      body: `<p style="margin-top:0">You pick the type of item first, and there are no types yet. Add one in <b>Asset types</b> (for example Rover phone or Fob), then come back here.</p>`,
+      onSubmit: async () => { setTimeout(() => { typesDialog(); $("#dlg").onclose = () => { $("#dlg").onclose = null; assetForm(null); }; }, 0); },
+    });
+  }
+  const a = existing || { id: "", category: "", model: "", imei: "", serial: "", phoneNumber: "" };
   const archivedCurrent = editing && existing.category && !typeByName(existing.category)?.active;
   const options =
     (editing && !existing.category ? '<option value="" selected>Choose a type…</option>' : "") +
+    (!editing ? '<option value="" selected disabled>Choose a type…</option>' : "") +
     (archivedCurrent ? `<option value="${esc(existing.category)}" selected>${esc(existing.category)} (archived)</option>` : "") +
-    types.map((t) => `<option value="${esc(t.name)}" ${startCat === t.name ? "selected" : ""}>${esc(t.name)}</option>`).join("") +
-    (editing ? "" : `<option value="__new__" ${startCat === "__new__" ? "selected" : ""}>＋ New asset type…</option>`);
+    types.map((t) => `<option value="${esc(t.name)}" ${editing && existing.category === t.name ? "selected" : ""}>${esc(t.name)}</option>`).join("");
   const detail = (k, label, extra = "") => `<label class="f" data-field="${k}">${label} <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="${k}" value="${esc(a[k])}" ${extra} /><span class="dup-warn err-text" data-dup="${k}" style="text-transform:none;font-weight:600"></span></label>`;
+
+  const justAdded = new Set();   // IDs saved in this dialog (the live data lags a moment behind)
+  let addAnother = false;
+  let touched = false;
+  let resync = () => {};
 
   formDialog({
     title: editing ? `Edit ${existing.id}` : "Add asset",
     submit: editing ? "Save changes" : "Add asset",
-    body: `<div class="form-grid">
-        <label class="f">Asset type<select name="category">${options}</select></label>
-        <label class="f">Asset ID (the barcode)<input name="id" value="${esc(a.id)}" ${editing ? "disabled" : ""} required placeholder="e.g. R1, IP-001, FOB-12" /></label>
-        <div id="newTypeBox" class="form-grid" style="grid-column:1/-1">
-          <label class="f">New type name<input name="newTypeName" placeholder="e.g. Fob" /></label>
-          <label class="f">ID prefix (optional)<input name="newTypePrefix" placeholder="e.g. F" /></label>
-          <label class="f">Digits <span class="muted" style="text-transform:none;font-weight:400">(0 gives F1, F2; 3 gives F-001)</span><input name="newTypePad" type="number" min="0" max="6" value="0" /></label>
-          <label class="chk" style="grid-column:1/-1"><input type="checkbox" name="newTypeSimple" /> Simple item: no model, phone number, IMEI or serial (like a fob)</label>
-        </div>
-        ${detail("model", "Model", 'placeholder="e.g. iPhone 13, iPad 10th gen"')}
-        ${detail("phoneNumber", "Phone number")}
-        ${detail("imei", "IMEI", 'inputmode="numeric"')}
-        ${detail("serial", "Serial number")}
-      </div>${editing ? "" : '<p class="muted" style="font-size:13px;margin-bottom:0">The Asset ID is what gets printed on the label. It can’t be changed later. Every detail field is optional.</p>'}`,
-    onOpen: () => {
+    body: `<label class="f">${editing ? "Type of item" : "What kind of item is this?"}<select name="category">${options}</select></label>
+      ${editing ? "" : '<p class="muted" style="font-size:13px;margin:6px 0 0">Need a new kind of item? <a href="#" id="openTypes">Add it in Asset types</a> first.</p>'}
+      <div id="assetRest" class="${editing ? "" : "hidden"}">
+        <div class="form-grid" style="margin-top:14px">
+          <label class="f" style="grid-column:1/-1">Barcode ID (what the label will say)<input name="id" value="${esc(a.id)}" ${editing ? "disabled" : ""} required placeholder="e.g. S001, FOB-12" />
+            <span class="muted" data-hint style="text-transform:none;font-weight:400;font-size:13px"></span>
+            <span class="dup-warn err-text" data-idwarn style="text-transform:none;font-weight:600"></span></label>
+          ${detail("model", "Model", 'placeholder="e.g. iPhone 13, iPad 10th gen"')}
+          ${detail("phoneNumber", "Phone number")}
+          ${detail("imei", "IMEI", 'inputmode="numeric"')}
+          ${detail("serial", "Serial number")}
+        </div>${editing ? "" : '<p class="muted" style="font-size:13px;margin-bottom:0">The barcode ID can’t be changed later. Every detail field is optional.</p>'}
+      </div>`,
+    onOpen: (d) => {
       const f = $("#dlgForm"), sel = f.elements.category, idEl = f.elements.id;
-      let touched = false;
-      const box = $("#newTypeBox");
+      const warn = $("[data-idwarn]", f), hint = $("[data-hint]", f);
+
+      const checkId = () => {
+        const id = norm(idEl.value);
+        const owner = !editing && id ? (justAdded.has(id) ? `asset ${id}` : idOwner(id)) : null;
+        warn.textContent = owner ? `Already used by ${owner}` : "";
+        idEl.classList.toggle("dup", !!owner);
+      };
       const sync = () => {
-        const isNew = sel.value === "__new__";
-        box.classList.toggle("hidden", !isNew);
+        const t = typeByName(sel.value);
+        $("#assetRest").classList.toggle("hidden", !sel.value);
         // Only show the detail fields this type uses (always show one that already has a value)
-        const fields = isNew ? (f.elements.newTypeSimple.checked ? [] : DETAIL_FIELDS.map(([k]) => k)) : fieldsOf(typeByName(sel.value));
+        const fields = fieldsOf(t);
         $$("[data-field]", f).forEach((el) => {
           const k = el.dataset.field;
           el.classList.toggle("hidden", !(fields.includes(k) || (editing && existing[k])));
         });
-        if (editing || touched) return;
-        if (isNew) {
-          const prefix = norm(f.elements.newTypePrefix.value);
-          idEl.value = prefix ? nextAssetId(prefix, Math.min(6, Math.max(0, parseInt(f.elements.newTypePad.value || "0", 10) || 0))) : "";
-        } else {
-          const t = typeByName(sel.value);
-          idEl.value = prefixOf(t) ? nextAssetId(prefixOf(t), padOf(t)) : "";
+        if (!editing) {
+          const p = prefixOf(t);
+          if (!touched) idEl.value = p ? nextAssetId(p, [...justAdded]) : "";
+          const used = p && takenIds([...justAdded]).some((id) => id.startsWith(p) && /^\d+$/.test(id.slice(p.length)));
+          hint.textContent = !t ? "" : !p ? "This type has no ID letters, so type the ID the barcode should say." : used ? "Filled in for you: the next number after the highest one already in use. You can change it." : `Filled in for you. This is the first ${t.name}, so it starts at 001. You can change it.`;
         }
+        checkId();
       };
+      resync = sync;
       // Warn as soon as a phone number, IMEI or serial matches another asset
       const checkDups = () => {
         const vals = Object.fromEntries(["imei", "serial", "phoneNumber"].map((k) => [k, f.elements[k]?.value ?? ""]));
@@ -675,22 +709,33 @@ function assetForm(existing) {
       };
       ["imei", "serial", "phoneNumber"].forEach((k) => f.elements[k].addEventListener("input", checkDups));
       checkDups();
-      sel.addEventListener("change", sync);
-      f.elements.newTypePrefix.addEventListener("input", sync);
-      f.elements.newTypePad.addEventListener("input", sync);
-      f.elements.newTypeSimple.addEventListener("change", sync);
-      idEl.addEventListener("input", () => (touched = true));
+      sel.addEventListener("change", () => { touched = false; sync(); });
+      idEl.addEventListener("input", () => { touched = true; checkId(); });
       sync();
+
+      if (!editing) {
+        $("#openTypes", f).onclick = (e) => {
+          e.preventDefault();
+          d.close();
+          typesDialog();
+          d.onclose = () => { d.onclose = null; assetForm(null); };   // come straight back here when they close it
+        };
+        const again = Object.assign(document.createElement("button"), { type: "button", className: "btn", id: "dlgAgain", textContent: "Add & add another" });
+        again.onclick = () => { addAnother = true; f.requestSubmit(); };
+        $(".foot", d).insertBefore(again, $("#dlgSubmit"));
+      }
     },
     onSubmit: async (fd) => {
-      let category = str(fd, "category");
+      const again = addAnother;
+      addAnother = false;
+      const category = str(fd, "category");
       const hidden = new Set($$("[data-field].hidden", $("#dlgForm")).map((el) => el.dataset.field));
       const vals = Object.fromEntries(DETAIL_FIELDS.map(([k]) => [k, hidden.has(k) ? (existing?.[k] ?? "") : str(fd, k)]));
+      if (!category) throw new Error("Choose what kind of item this is.");
       const dups = findDuplicates(cache.assets, vals, editing ? existing.id : null);
       if (dups.length) throw new Error(dups.map((d) => `The ${d.label} ${d.value} is already on ${d.assetId}.`).join(" ") + " Check for a typo, or edit that asset instead.");
 
       if (editing) {
-        if (!category) throw new Error("Pick an asset type.");
         const before = pickFields(existing, ASSET_FIELDS);
         const after = { category, ...vals };
         const changed = ASSET_FIELDS.filter((f) => before[f] !== after[f]);
@@ -702,27 +747,23 @@ function assetForm(existing) {
         return toast(`Saved ${existing.id}`, "ok");
       }
 
-      const ops = [];
-      if (category === "__new__") {
-        const name = str(fd, "newTypeName");
-        if (!slugify(name)) throw new Error("Enter a name for the new asset type.");
-        if (cache.types.some((t) => t.id === slugify(name))) throw new Error(`“${name}” already exists as an asset type. Pick it from the list.`);
-        const prefix = norm(str(fd, "newTypePrefix"));
-        if (!PREFIX_RE.test(prefix)) throw new Error("Prefix can use letters, numbers, dot, dash, underscore (10 max).");
-        const simple = !!fd.get("newTypeSimple");
-        const npad = Math.min(6, Math.max(0, parseInt(str(fd, "newTypePad") || "0", 10) || 0));
-        ops.push(typeCreateOp({ name, prefix, pad: npad, fields: simple ? [] : DETAIL_FIELDS.map(([k]) => k) }));
-        category = name;
-      }
-      if (!category) throw new Error("Pick an asset type.");
       const id = norm(fd.get("id"));
-      if (!id) throw new Error("Enter an Asset ID. It's what the barcode will say.");
-      if (!validId(id)) throw new Error("Asset ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
-      const owner = idOwner(id);
+      if (!id) throw new Error("Enter a barcode ID. It's what the label will say.");
+      if (!validId(id)) throw new Error("The barcode ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
+      const owner = justAdded.has(id) ? `asset ${id}` : idOwner(id);
       if (owner) throw new Error(`“${id}” is already used by ${owner}.`);
-      ops.push(assetCreateOp({ id, category, ...vals }));
-      await commit(ops);
-      toast(`Added ${id}`, "ok");
+      await commit([assetCreateOp({ id, category, ...vals })]);
+      if (!again) return toast(`Added ${id}`, "ok");
+
+      // "Add & add another": keep the dialog and the type, clear the details, suggest the next ID
+      justAdded.add(id);
+      toast(`Added ${id}. Ready for the next one.`, "ok");
+      const f = $("#dlgForm");
+      DETAIL_FIELDS.forEach(([k]) => { f.elements[k].value = ""; });
+      touched = false;
+      resync();
+      ($$("[data-field]:not(.hidden) input", f)[0] || f.elements.id).focus();
+      return false;
     },
   });
 }
@@ -916,7 +957,7 @@ function wireTemplates(kind) {
 function importDialog(kind) {
   const isAsset = kind === "asset";
   const example = isAsset
-    ? "assetId,assetType,model,imei,serial,phoneNumber\nR1,Rover phone,iPhone 13,356938035643809,F2LXYZ123,352-555-0101\n,Fob,,,,"
+    ? "assetType,model,imei,serial,phoneNumber\nRover phone,iPhone 13,356938035643809,F2LXYZ123,352-555-0101\nFob,,,,"
     : "employeeId,badgeId,name\n10234,1002340077,Jane Doe";
   const d = $("#dlg");
   d.onclose = null;
@@ -924,7 +965,7 @@ function importDialog(kind) {
     ? `<label class="f" style="margin-top:10px">Asset type for rows without one<select id="impDefault"><option value="">(none: rows must have an assetType)</option>${activeTypes().map((t) => `<option>${esc(t.name)}</option>`).join("")}</select></label>`
     : "";
   const help = isAsset
-    ? "Columns: assetId, assetType, model, imei, serial, phoneNumber. Everything except assetType is optional. Leave assetId blank to auto-number from the type's prefix. IDs that already exist are skipped, and new asset types in the file are created for you."
+    ? "Columns: assetType (must already exist under Asset types), and optionally model, imei, serial, phoneNumber. You don't need an ID column: every device is numbered for you with the lowest free number for its type (R001, R002…). Add an assetId column only to choose a specific barcode. Rows with an unknown type or a duplicate IMEI, serial or phone number are skipped."
     : "Columns: employeeId, name (or firstName and lastName), and optionally badgeId. If someone already exists and the row has a badgeId, their badge number is filled in. Nothing else about them changes.";
   d.innerHTML = `<h2>Import ${isAsset ? "assets" : "staff"} from a spreadsheet</h2>
     <p class="muted" style="margin-top:0">${fileNote} ${help}</p>
@@ -956,7 +997,7 @@ function importDialog(kind) {
   function preview(prefix = "") {
     const existing = new Set([...cache.assets.map((x) => x.id), ...cache.staff.map((x) => x.id), ...cache.staff.map((x) => x.badgeId).filter(Boolean)]);
     parsed = parseImport(kind, rowsNow(), {
-      existingIds: existing, pad: S.ASSET_ID_PAD,
+      existingIds: existing, pad: ID_DIGITS,
       existingAssets: cache.assets,
       existingStaff: new Map(cache.staff.map((x) => [x.id, { name: x.name, badgeId: x.badgeId || "" }])),
       knownTypes: activeTypes().map((t) => ({ name: t.name, prefix: prefixOf(t), pad: padOf(t) })),

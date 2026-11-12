@@ -1,6 +1,6 @@
 // Pure spreadsheet-import parsing (no Firebase) — unit tested in tests/.
 // Works on rows read from a CSV, a pasted table or an Excel sheet (array of arrays; first row = header).
-import { norm, validId, derivePrefix, nextIdFor } from "./util.js";
+import { norm, validId, lowestFreeIdFor } from "./util.js";
 
 /** Compare IMEIs, serials and phone numbers loosely: ignore case, spaces, dashes and brackets. */
 export const normDetail = (field, v) => {
@@ -103,18 +103,14 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
   const claim = (rec, id) => { for (const [f] of DUP_FIELDS) { const v = normDetail(f, rec[f]); if (v) taken[f].set(v, id); } };
 
   const known = new Map(knownTypes.map((t) => [t.name.toLowerCase(), t]));
-  const newTypes = new Map();      // lower → name as typed
-  const canonicalType = (raw) => {
+  // Types are only created in Assets → Asset types, so a row has to name one that exists.
+  const typeOf = (raw) => {
     const name = (raw || defaultType || "").trim();
-    if (!name) return "";
-    const k = name.toLowerCase();
-    if (known.has(k)) return known.get(k).name;
-    if (!newTypes.has(k)) newTypes.set(k, name);
-    return newTypes.get(k);
+    return name ? { name, info: known.get(name.toLowerCase()) } : null;
   };
   const typeInfo = (name) => known.get(name.toLowerCase());
-  const prefixFor = (name) => (typeInfo(name) ? typeInfo(name).prefix ?? "" : derivePrefix(name));
-  const padFor = (name) => (typeInfo(name)?.pad ?? pad);
+  const prefixFor = (name) => typeInfo(name)?.prefix ?? "";
+  const padFor = (name) => typeInfo(name)?.pad ?? pad;
 
   rows.slice(1).forEach((r, n) => {
     const line = n + 2;
@@ -158,14 +154,16 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
       return;
     }
 
-    const assetType = canonicalType(cell(r, idx.assetType));
-    if (!assetType) return errors.push({ line, message: `${rawId || "Row"}: missing asset type (add an assetType column or choose a default).` });
+    const t = typeOf(cell(r, idx.assetType));
+    if (!t) return errors.push({ line, message: `${rawId || "Row"}: missing asset type (add an assetType column or choose a default).` });
+    if (!t.info) return errors.push({ line, message: `${rawId || "Row"}: there is no asset type “${t.name}”. Add it under Assets → Asset types first, or fix the spelling — skipped.` });
+    const assetType = t.info.name;
     const rec = { assetType, model: cell(r, idx.model), imei: cell(r, idx.imei), serial: cell(r, idx.serial), phoneNumber: cell(r, idx.phoneNumber) };
 
     if (!rawId) {
       const dup = dupMessage(rec, "");
       if (dup) return errors.push({ line, message: dup });
-      if (!prefixFor(assetType)) return errors.push({ line, message: `${assetType} has no ID prefix, so this row needs an assetId.` });
+      if (!prefixFor(assetType)) return errors.push({ line, message: `${assetType} has no ID letters, so this row needs an assetId.` });
       claim(rec, "(an earlier row in this file)");
       pending.push({ line, rec });
       return;
@@ -180,16 +178,14 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
     records.push({ id: rawId, ...rec });
   });
 
-  // Pass 2: auto-number blank asset IDs, per type prefix, after the highest existing/explicit number
+  // Pass 2: number the rows with no ID, in file order, using the lowest free number for the type's letters
   for (const { rec } of pending) {
-    const id = nextIdFor(prefixFor(rec.assetType), padFor(rec.assetType), [...existingIds, ...seen]);
+    const id = lowestFreeIdFor(prefixFor(rec.assetType), padFor(rec.assetType), [...existingIds, ...seen]);
     seen.add(id);
     records.push({ id, ...rec });
   }
 
-  // Only report new types that are actually used by a kept record
-  const used = new Set(records.map((r) => r.assetType?.toLowerCase()));
-  return { records, updates, errors, newTypes: [...newTypes.entries()].filter(([k]) => used.has(k)).map(([, v]) => v) };
+  return { records, updates, errors, newTypes: [] };
 }
 
 /**
@@ -270,12 +266,12 @@ export const TEMPLATES = {
   },
   asset: {
     file: "assets-template",
-    headers: ["assetId", "assetType", "model", "imei", "serial", "phoneNumber"],
+    headers: ["assetType", "model", "imei", "serial", "phoneNumber", "assetId"],
     notes: [
       ["Asset import: how to fill this in"],
-      ["assetType", "Required. For example Rover phone, iPad or Fob. A type that doesn't exist yet is created for you."],
-      ["assetId", "Optional. The barcode text, such as R1 or FOB-12. Leave blank to auto-number from the type's ID prefix (a type with no prefix needs an ID)."],
+      ["assetType", "Required. Must match a type you've already added under Assets → Asset types (for example Rover phone, iPad or Fob). Rows with an unknown type are skipped."],
       ["model, imei, serial, phoneNumber", "All optional. Leave them blank for simple items like fobs."],
+      ["assetId", "Leave this blank. Each device is numbered for you from its type's ID letters, using the lowest free number (R001, R002, R003…). Only fill it in to choose a specific barcode, or for a type that has no ID letters."],
       [""],
       ["IDs that already exist are skipped. Format the ID columns as Text so leading zeros are kept. Only the first sheet is imported."],
     ],
