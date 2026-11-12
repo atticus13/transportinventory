@@ -8,7 +8,7 @@ import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
 import { classifyScan, summarizeCount } from "./inventory-logic.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=8";
 import { staleStaff, worthChecking, snoozeUntil, STALE_DAYS, SNOOZE_DAYS } from "./stale-logic.js";
 
 const REPORT_MAX = 5000;
@@ -1776,6 +1776,7 @@ if (cameraSupported() && window.matchMedia?.("(pointer: coarse)")?.matches) {
     if (!inv) return;
     openCameraScanner({
       title: "Scan devices to count",
+      onManual: () => $("#invScan").focus(),
       mirror: () => ({ title: "Scan each device", sub: $("#invMsg").textContent }),
       onCode: (code) => { $("#invScan").value = code; $("#invScan").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true })); return true; },
     }).catch((e) => toast(e.message, "err", 6000));

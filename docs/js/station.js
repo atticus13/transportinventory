@@ -3,7 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=8";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -591,6 +591,7 @@ if (cameraSupported() && mq("(pointer: coarse)")) {
         return !pinActive();
       },
       onClose: () => { open = null; },
+      onManual: () => { if (!$("#manual").open) $("#manualBtn").click(); },
     }).catch((e) => { open = null; showError(e.message, { title: "Camera" }); });
   });
 }

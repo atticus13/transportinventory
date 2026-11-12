@@ -5,6 +5,7 @@ import { norm } from "./util.js";
 const ZXING = ["https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js", "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"];
 const FORMATS = ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "codabar", "qr_code"];
 const SAME_CODE_GAP_MS = 2500;
+export const CAMERA_VERSION = "8";
 
 /**
  * Pure. The camera sees the same barcode on every frame, so a code only counts again after it has been out of view for `gap` ms.
@@ -58,11 +59,13 @@ const CSS = `
 .camscan{position:fixed;inset:0;z-index:9999;background:#05080f;display:flex;flex-direction:column;color:#eaf0fa;font-family:inherit}
 .camscan header{display:flex;align-items:center;gap:10px;padding:12px 14px}
 .camscan header b{flex:1;font-size:17px}
-.camscan .cs-view{position:relative;flex:1;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
+.camscan .cs-view{position:relative;flex:0 0 36vh;min-height:0;display:flex;align-items:center;justify-content:center;overflow:hidden}
 .camscan video{width:100%;height:100%;object-fit:cover}
-.camscan .cs-box{position:absolute;left:8%;right:8%;top:50%;height:34%;transform:translateY(-50%);border:3px solid #ff8a1f;border-radius:14px;box-shadow:0 0 0 100vmax rgba(0,0,0,.35);pointer-events:none}
+.camscan .cs-box{position:absolute;left:8%;right:8%;top:50%;height:56%;transform:translateY(-50%);border:3px solid #ff8a1f;border-radius:14px;box-shadow:0 0 0 100vmax rgba(0,0,0,.35);pointer-events:none}
 .camscan .cs-box.hit{border-color:#3ddc84}
-.camscan footer{padding:10px 14px 18px;display:grid;gap:10px;text-align:center}
+.camscan footer{flex:1;padding:12px 14px 18px;display:flex;flex-direction:column;gap:10px;text-align:center}
+.camscan .cs-manual{margin-top:auto}
+.camscan .cs-ver{font-size:11px;color:#5c6b85;font-weight:400}
 .camscan .cs-status{font-size:15px;font-weight:600;min-height:20px;color:#9fb0c8}
 .camscan .cs-bubble{position:relative;overflow:hidden;border-radius:22px;background:linear-gradient(160deg,#ff8a1f,#f26a00);color:#1b0f02;min-height:104px;display:grid}
 .camscan .cs-step{grid-area:1/1;display:grid;place-content:center;gap:4px;padding:16px 18px;text-align:center}
@@ -75,19 +78,20 @@ const CSS = `
 /**
  * Opens a full-screen camera scanner.
  *  onCode(code)  called for every new barcode; return false to close, true/undefined to keep scanning (if keepOpen).
+ *  onManual      optional; shows a "Type it instead" button that closes the camera and calls this
  *  mirror        optional () => ({title, sub}) shown under the picture (the station shows what to do next)
  * Returns {close()}.
  */
-export async function openCameraScanner({ title = "Scan a barcode", onCode, keepOpen = true, mirror = null, onClose = null }) {
+export async function openCameraScanner({ title = "Scan a barcode", onCode, keepOpen = true, mirror = null, onClose = null, onManual = null }) {
   if (!cameraSupported()) throw new Error("This browser can't use the camera here. (It needs HTTPS and permission to use the camera.)");
   if (!document.getElementById("camscan-css")) {
     const st = document.createElement("style"); st.id = "camscan-css"; st.textContent = CSS; document.head.appendChild(st);
   }
   const el = document.createElement("div");
   el.className = "camscan"; el.setAttribute("role", "dialog"); el.setAttribute("aria-label", title);
-  el.innerHTML = `<header><b></b><button type="button" data-x>Done</button></header>
+  el.innerHTML = `<header><b></b><span class="cs-ver">v${CAMERA_VERSION}</span><button type="button" data-x>Done</button></header>
     <div class="cs-view"><video playsinline muted></video><div class="cs-box"></div></div>
-    <footer><div class="cs-status">Starting the camera…</div><div class="cs-bubble"></div></footer>`;
+    <footer><div class="cs-status">Starting the camera…</div><div class="cs-bubble"></div>${onManual ? '<button type="button" class="cs-manual" data-m>⌨ Type it instead</button>' : ""}</footer>`;
   el.querySelector("b").textContent = title;
   document.body.appendChild(el);
   const video = el.querySelector("video"), box = el.querySelector(".cs-box"), status = el.querySelector(".cs-status"), bubble = el.querySelector(".cs-bubble");
@@ -120,6 +124,7 @@ export async function openCameraScanner({ title = "Scan a barcode", onCode, keep
     el.remove(); onClose?.();
   };
   el.querySelector("[data-x]").addEventListener("click", close);
+  el.querySelector("[data-m]")?.addEventListener("click", () => { close(); onManual?.(); });
 
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1280 }, height: { ideal: 720 } }, audio: false });
