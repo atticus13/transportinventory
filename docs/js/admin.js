@@ -193,13 +193,24 @@ $("#loginForm").addEventListener("submit", async (e) => {
   try { await A.signInWithEmailAndPassword(auth, $("#lEmail").value.trim().toLowerCase(), $("#lPass").value); }
   catch (err) { $("#lErr").textContent = friendlyAuthError(err); }
 });
+// Password emails: ask Firebase to add a "Continue" link back to this site.
+// If the domain isn't in Firebase's Authorized domains yet, fall back to a plain email.
+const SITE_URL = "https://atticus13.github.io/transportinventory/admin.html";
+async function sendReset(email) {
+  try { await A.sendPasswordResetEmail(auth, email, { url: SITE_URL }); }
+  catch (err) {
+    const c = err?.code || "";
+    if (c.includes("continue-uri") || c.includes("invalid-continue") || c.includes("unauthorized-domain")) await A.sendPasswordResetEmail(auth, email);
+    else throw err;
+  }
+}
 $("#forgotBtn").addEventListener("click", async () => {
   const email = $("#lEmail").value.trim();
   const out = $("#lErr");
   out.style.color = "";
   if (!email) { out.textContent = "Type your email above first, then tap “Forgot password?”."; return; }
   try {
-    await A.sendPasswordResetEmail(auth, email);
+    await sendReset(email);
     out.style.color = "var(--ok)";
     out.textContent = `If ${email} has an admin login, a password reset link is on its way. Check your inbox (and spam).`;
   } catch (err) {
@@ -1239,7 +1250,7 @@ function importAdminsDialog() {
           audit: { action: `${r.role}.create`, targetType: r.role, targetId: uid, summary: `Created ${r.role} login ${r.name} <${r.email}>${r.employeeId ? `, staff ID ${r.employeeId}` : ""} (spreadsheet import)`, before: null, after: { email: r.email, name: r.name, ...(r.employeeId ? { employeeId: r.employeeId } : {}) } },
         }, ...(r.newStaff ? [staffCreateOp({ id: r.employeeId, name: r.name, badgeId: r.badgeId })] : [])], batchId);
       } catch (err) { failed.push(`${r.email}: login created but not activated (${explain(err)})`); continue; }
-      try { await A.sendPasswordResetEmail(auth, r.email); } catch { failed.push(`${r.email}: created, but the password email didn't send. Use “Send password reset” on the Admins tab.`); }
+      try { await sendReset(r.email); } catch { failed.push(`${r.email}: created, but the password email didn't send. Use “Send password reset” on the Admins tab.`); }
       done++;
     }
     $("#impPreview").innerHTML = `<p style="margin:0 0 6px"><b>${done}</b> of ${parsed.records.length} created.${done ? " Each person was emailed a link to set a password." : ""}</p>
@@ -1448,7 +1459,7 @@ $("#tab-admins").addEventListener("click", async (e) => {
     if (btn.dataset.act === "link") return linkStaffDialog(u);
     if (btn.dataset.act === "activity") { $("#cAdmin").value = u.id; showTab("changelog"); $("#cAdmin").value = u.id; return runChangelog(); }
     if (btn.dataset.act === "reset") {
-      await A.sendPasswordResetEmail(auth, u.email);
+      await sendReset(u.email);
       return toast(`Password reset email sent to ${u.email}`, "ok");
     }
     const activate = btn.dataset.act === "reactivate";
