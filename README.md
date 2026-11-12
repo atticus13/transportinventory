@@ -116,7 +116,7 @@ Bulk label printing with saved templates is in Assets/Staff (tick rows → **Pri
 - **Admins:** add one at a time, or import a spreadsheet.
 
 ## Spreadsheet imports
-**Staff, Assets and Admins** each have an **Import spreadsheet** button, with **Download Excel template** and **Download CSV template** buttons for a blank, correctly headed file (the Excel one has an Instructions sheet; format the ID columns as Text in Excel so leading zeros are kept). Upload an Excel (`.xlsx`) or CSV file, or paste rows. The first row is headers; the first sheet is used. You get a preview of what will be added and what is skipped (and why) before anything is saved.
+**Staff, Assets and Admins** each have an **Import spreadsheet** button, with **Download Excel template** and **Download CSV template** buttons for a blank, correctly headed file. The Excel one has an Instructions sheet and Text-formatted columns, and the **asset** template has a drop-down of the device types that exist right now (a role drop-down on the admin one). If you need a new device type, add it under Asset types *before* downloading so it's on the list. Barcode numbers / asset IDs are generated automatically, so there's no ID column. Upload an Excel (`.xlsx`) or CSV file, or paste rows. The first row is headers; the first sheet is used. You get a preview of what will be added and what is skipped (and why) before anything is saved.
 
 | Import | Columns |
 |---|---|

@@ -951,7 +951,11 @@ const fileNote = "Excel (.xlsx) and CSV files both work. The first row must be c
 /** Hook up the "Download template" buttons inside an import dialog. */
 function wireTemplates(kind) {
   const go = (format) => async () => {
-    try { await downloadTemplate(kind, format); }
+    try {
+      const types = kind === "asset" ? activeTypes().map((t) => ({ name: t.name, prefix: prefixOf(t), fields: fieldsOf(t) })) : [];
+      await downloadTemplate(kind, format, { types });
+      if (kind === "asset" && format === "xlsx" && !types.length) toast("There are no asset types yet, so the drop-down is empty. Add a type under Asset types, then download again.", "info", 7000);
+    }
     catch (err) { toast(`${err.message || err} You can use the CSV template instead.`, "err", 6000); }
   };
   $("#tplXlsx").onclick = go("xlsx");

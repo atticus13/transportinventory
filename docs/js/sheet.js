@@ -2,9 +2,32 @@
 // Excel files are read in the browser with SheetJS, loaded only when one is chosen.
 import { parseCSV, toCSV, downloadFile } from "./util.js";
 import { TEMPLATES } from "./import-logic.js";
+import { buildTemplateXlsx } from "./template-logic.js";
 
 const SHEETJS = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
+// Only used to WRITE the template (it can add drop-downs); reading uploads uses SheetJS above.
+const EXCELJS = ["https://cdnjs.cloudflare.com/ajax/libs/exceljs/4.4.0/exceljs.min.js", "https://cdn.jsdelivr.net/npm/exceljs@4.4.0/dist/exceljs.min.js"];
 let loading = null;
+let loadingXl = null;
+
+function loadExcelJS() {
+  if (window.ExcelJS) return Promise.resolve(window.ExcelJS);
+  loadingXl ??= (async () => {
+    for (const src of EXCELJS) {
+      try {
+        await new Promise((resolve, reject) => {
+          const s = Object.assign(document.createElement("script"), { src, async: true });
+          s.onload = resolve; s.onerror = () => { s.remove(); reject(new Error("load failed")); };
+          document.head.appendChild(s);
+        });
+        if (window.ExcelJS) return window.ExcelJS;
+      } catch { /* try the next source */ }
+    }
+    loadingXl = null;
+    throw new Error("Couldn't load the Excel writer (check the internet connection).");
+  })();
+  return loadingXl;
+}
 
 function loadSheetJS() {
   if (window.XLSX) return Promise.resolve(window.XLSX);
@@ -54,27 +77,14 @@ export async function readSpreadsheet(file) {
   return { rows: parseCSV(await file.text()), sheet: null };
 }
 
-/** The blank template workbook: sheet "Import" (header row) and sheet "Instructions". */
-export function buildTemplateWorkbook(XLSX, kind) {
-  const t = TEMPLATES[kind];
-  if (!t) throw new Error("Unknown template.");
-  const ws = XLSX.utils.aoa_to_sheet([t.headers]);
-  ws["!cols"] = t.headers.map((h) => ({ wch: Math.max(14, h.length + 4) }));
-  const notes = XLSX.utils.aoa_to_sheet(t.notes);
-  notes["!cols"] = [{ wch: 30 }, { wch: 110 }];
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, ws, "Import");   // the first sheet is the one that gets imported
-  XLSX.utils.book_append_sheet(wb, notes, "Instructions");
-  return wb;
-}
-
-/** Download a blank template for "staff", "asset" or "admin" as .xlsx (with a notes sheet) or .csv. */
-export async function downloadTemplate(kind, format = "xlsx") {
+/** Download a blank template for "staff", "asset" or "admin" as .xlsx (drop-downs + an Instructions sheet) or .csv.
+ *  `types` ([{name, prefix, fields}], asset only) fills the device-type drop-down and the instructions. */
+export async function downloadTemplate(kind, format = "xlsx", { types = [] } = {}) {
   const t = TEMPLATES[kind];
   if (!t) throw new Error("Unknown template.");
   if (format === "csv") return downloadFile(`${t.file}.csv`, toCSV(t.headers, []));
-  const XLSX = await loadSheetJS();
-  const bytes = XLSX.write(buildTemplateWorkbook(XLSX, kind), { type: "array", bookType: "xlsx" });
+  const ExcelJS = await loadExcelJS();
+  const bytes = await buildTemplateXlsx(ExcelJS, kind, { types });
   const url = URL.createObjectURL(new Blob([bytes], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }));
   const a = Object.assign(document.createElement("a"), { href: url, download: `${t.file}.xlsx` });
   document.body.appendChild(a); a.click(); a.remove();

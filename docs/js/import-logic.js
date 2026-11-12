@@ -270,14 +270,11 @@ export const TEMPLATES = {
   },
   asset: {
     file: "assets-template",
-    headers: ["assetType", "model", "imei", "serial", "phoneNumber", "assetId"],
+    headers: ["assetType", "model", "imei", "serial", "phoneNumber"],
     notes: [
       ["Asset import: how to fill this in"],
-      ["assetType", "Required. Must match a type you've already added under Assets → Asset types (for example Rover phone, iPad or Fob). Rows with an unknown type are skipped."],
-      ["model, imei, serial, phoneNumber", "Required if the asset type is set up with that field (ticked under Assets → Asset types); rows missing one are skipped. Types without the field (like a fob) can leave it blank."],
-      ["assetId", "Leave this blank. Each device is numbered for you from its type's ID letters, using the lowest free number (R001, R002, R003…). Only fill it in to choose a specific barcode, or for a type that has no ID letters."],
-      [""],
-      ["IDs that already exist are skipped. Format the ID columns as Text so leading zeros are kept. Only the first sheet is imported."],
+      ["assetType", "Required. Must match a device type that exists (Assets → Asset types)."],
+      ["model, imei, serial, phoneNumber", "Required only if the device type is set up with that field. Barcode numbers / asset IDs are generated automatically."],
     ],
   },
   admin: {

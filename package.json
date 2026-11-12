@@ -4,5 +4,8 @@
   "type": "module",
   "scripts": {
     "test": "node --test tests/logic.test.mjs"
+  },
+  "devDependencies": {
+    "exceljs": "^4.4.0"
   }
 }

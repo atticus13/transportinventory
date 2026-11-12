@@ -429,8 +429,9 @@ test("every template's header row is understood by its importer", () => {
   assert.ok(!parseAdminImport([TEMPLATES.admin.headers]).fatal);
   // a filled-in row round-trips through each template
   assert.equal(parseImport("staff", [TEMPLATES.staff.headers, ["1", "99", "Jane"]]).records[0].badgeId, "99");
-  assert.equal(parseImport("asset", [TEMPLATES.asset.headers, ["Rover phone", "", "", "", "", "R1"]], { knownTypes: [{ name: "Rover phone", prefix: "R", pad: 3 }] }).records[0].id, "R1");
-  assert.equal(parseImport("asset", [TEMPLATES.asset.headers, ["Rover phone", "", "", "", "", ""]], { knownTypes: [{ name: "Rover phone", prefix: "R", pad: 3 }] }).records[0].id, "R001");
+  const rover = { knownTypes: [{ name: "Rover phone", prefix: "R", pad: 3 }] };
+  assert.equal(parseImport("asset", [[...TEMPLATES.asset.headers, "assetId"], ["Rover phone", "", "", "", "", "R1"]], rover).records[0].id, "R1");
+  assert.equal(parseImport("asset", [TEMPLATES.asset.headers, ["Rover phone", "", "", "", ""]], rover).records[0].id, "R001");
   assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "station", "", ""]]).records[0].role, "station");
   assert.equal(parseAdminImport([TEMPLATES.admin.headers, ["a@b.org", "A", "admin", "77", ""]]).records[0].employeeId, "77");
   for (const t of Object.values(TEMPLATES)) assert.ok(t.notes.length > 2 && t.file);
@@ -479,4 +480,49 @@ test("asset import: the detail fields a type is set up with are required; types 
   assert.equal(errors.length, 2);
   assert.match(errors[0].message, /Rover phone needs IMEI/);
   assert.match(errors[1].message, /needs model, phone number/);
+});
+
+// ───────── Excel template (drop-down + instructions) ─────────
+import { buildTemplateXlsx, templateNotes } from "../docs/js/template-logic.js";
+let ExcelJSlib = null;
+try { ExcelJSlib = (await import("exceljs")).default; } catch { /* optional dev dependency */ }
+const types = [{ name: "Rover phone", prefix: "R", fields: ["model", "phoneNumber", "imei", "serial"] }, { name: "Fob", prefix: "", fields: [] }];
+
+test("asset template instructions: add types first, IDs are generated, lists each type's required fields", () => {
+  const text = templateNotes("asset", types).flat().join("\n");
+  assert.match(text, /drop-down/);
+  assert.match(text, /add it first/i);
+  assert.match(text, /download this template again/);
+  assert.match(text, /generated automatically/);
+  assert.match(text, /Rover phone · R/);
+  assert.match(text, /Model, Phone number, IMEI, Serial number · R001/);
+  assert.match(text, /Fob · \(none\)/);
+  assert.match(templateNotes("asset", []).flat().join("\n"), /no device types yet/);
+  assert.ok(!TEMPLATES.asset.headers.includes("assetId"));
+});
+
+test("asset template .xlsx has a device-type drop-down on assetType, an Instructions sheet and Text-formatted columns", { skip: !ExcelJSlib && "exceljs not installed" }, async () => {
+  const buf = await buildTemplateXlsx(ExcelJSlib, "asset", { types });
+  const wb = new ExcelJSlib.Workbook();
+  await wb.xlsx.load(buf);
+  assert.deepEqual(wb.worksheets.map((w) => w.name), ["Import", "Device types", "Instructions"]);
+  const imp = wb.getWorksheet("Import");
+  assert.deepEqual(imp.getRow(1).values.slice(1), TEMPLATES.asset.headers);
+  const dv = imp.getCell("A2").dataValidation;
+  assert.equal(dv.type, "list");
+  assert.equal(dv.formulae[0], "'Device types'!$A$2:$A$3");
+  assert.equal(imp.getCell("A1500").dataValidation.type, "list");
+  assert.ok(!imp.getCell("B2").dataValidation?.type);
+  assert.deepEqual(wb.getWorksheet("Device types").getColumn(1).values.slice(2), ["Rover phone", "Fob"]);
+  assert.match(wb.getWorksheet("Instructions").getCell("B3").value, /add it first/i);
+  assert.equal(imp.getColumn(1).numFmt, "@");
+});
+
+test("templates without types or for other imports still build (admin role drop-down)", { skip: !ExcelJSlib && "exceljs not installed" }, async () => {
+  const none = new ExcelJSlib.Workbook(); await none.xlsx.load(await buildTemplateXlsx(ExcelJSlib, "asset", { types: [] }));
+  assert.deepEqual(none.worksheets.map((w) => w.name), ["Import", "Instructions"]);
+  const adm = new ExcelJSlib.Workbook(); await adm.xlsx.load(await buildTemplateXlsx(ExcelJSlib, "admin"));
+  assert.equal(adm.getWorksheet("Import").getCell("C2").dataValidation.formulae[0], '"admin,station"');
+  const staff = new ExcelJSlib.Workbook(); await staff.xlsx.load(await buildTemplateXlsx(ExcelJSlib, "staff"));
+  assert.deepEqual(staff.worksheets.map((w) => w.name), ["Import", "Instructions"]);
 });
