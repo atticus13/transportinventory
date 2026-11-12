@@ -2,6 +2,26 @@
 // Works on rows read from a CSV, a pasted table or an Excel sheet (array of arrays; first row = header).
 import { norm, validId, derivePrefix, nextIdFor } from "./util.js";
 
+/** Compare IMEIs, serials and phone numbers loosely: ignore case, spaces, dashes and brackets. */
+export const normDetail = (field, v) => {
+  const t = String(v ?? "").trim();
+  if (!t) return "";
+  return field === "serial" ? t.toUpperCase().replace(/[\s\-_.]/g, "") : t.replace(/[^0-9a-z]/gi, "").toUpperCase();
+};
+export const DUP_FIELDS = [["imei", "IMEI"], ["serial", "serial number"], ["phoneNumber", "phone number"]];
+
+/** Which of imei/serial/phoneNumber are already on another asset? → [{field, label, value, assetId}] */
+export function findDuplicates(assets, values, ignoreId = null) {
+  const out = [];
+  for (const [field, label] of DUP_FIELDS) {
+    const v = normDetail(field, values?.[field]);
+    if (!v) continue;
+    const hit = assets.find((a) => a.id !== ignoreId && normDetail(field, a[field]) === v);
+    if (hit) out.push({ field, label, value: String(values[field]).trim(), assetId: hit.id });
+  }
+  return out;
+}
+
 const key = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const COLS = {
@@ -47,7 +67,7 @@ const BAD_ID = (v) => `“${v}” has characters we can't use (letters, numbers,
  * returns      : {records, updates, errors:[{line,message}], newTypes:[name], fatal?:string}
  *   staff: records = new people, updates = existing people getting a badge number
  */
-export function parseImport(kind, rows, { existingIds = new Set(), existingStaff = new Map(), pad = 3, knownTypes = [], defaultType = "" } = {}) {
+export function parseImport(kind, rows, { existingIds = new Set(), existingStaff = new Map(), existingAssets = [], pad = 3, knownTypes = [], defaultType = "" } = {}) {
   const errors = [];
   const none = { records: [], updates: [], errors, newTypes: [] };
   if (!rows.length) return { ...none, fatal: "Nothing to import." };
@@ -69,6 +89,16 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
   const records = [];
   const updates = [];
   const pending = [];              // asset rows needing an auto ID
+  const taken = Object.fromEntries(DUP_FIELDS.map(([f]) => [f, new Map()])); // normalised value → asset id (existing, then this file)
+  for (const a of existingAssets) for (const [f] of DUP_FIELDS) { const v = normDetail(f, a[f]); if (v) taken[f].set(v, a.id); }
+  const dupMessage = (rec, id) => {
+    for (const [f, label] of DUP_FIELDS) {
+      const v = normDetail(f, rec[f]);
+      if (v && taken[f].has(v)) return `${id || "Row"}: ${label} ${rec[f]} is already on ${taken[f].get(v)} — skipped.`;
+    }
+    return null;
+  };
+  const claim = (rec, id) => { for (const [f] of DUP_FIELDS) { const v = normDetail(f, rec[f]); if (v) taken[f].set(v, id); } };
 
   const known = new Map(knownTypes.map((t) => [t.name.toLowerCase(), t]));
   const newTypes = new Map();      // lower → name as typed
@@ -131,14 +161,20 @@ export function parseImport(kind, rows, { existingIds = new Set(), existingStaff
     const rec = { assetType, model: cell(r, idx.model), imei: cell(r, idx.imei), serial: cell(r, idx.serial), phoneNumber: cell(r, idx.phoneNumber) };
 
     if (!rawId) {
+      const dup = dupMessage(rec, "");
+      if (dup) return errors.push({ line, message: dup });
       if (!prefixFor(assetType)) return errors.push({ line, message: `${assetType} has no ID prefix, so this row needs an assetId.` });
+      claim(rec, "(an earlier row in this file)");
       pending.push({ line, rec });
       return;
     }
     if (!validId(rawId)) return errors.push({ line, message: BAD_ID(rawId) });
     if (existingIds.has(rawId)) return errors.push({ line, message: `${rawId} already exists — skipped.` });
     if (seen.has(rawId)) return errors.push({ line, message: `${rawId} appears twice in the file — skipped.` });
+    const dup = dupMessage(rec, rawId);
+    if (dup) return errors.push({ line, message: dup });
     seen.add(rawId);
+    claim(rec, rawId);
     records.push({ id: rawId, ...rec });
   });
 

@@ -2,7 +2,7 @@ import { auth, db, A, F, appMod, firebaseConfig, configured, friendlyAuthError }
 import { SETTINGS as S } from "./firebase-config.js";
 import { $, $$, esc, norm, validId, toDate, fmtDT, fmtFull, fmtDur, ymd, rangeFromInputs, toCSV, downloadFile, parseCSV, toast, slugify, derivePrefix, nextIdFor, beep } from "./util.js";
 import { normalizeLog, summarize, ACTIVITY_HEADERS, activityRows, idMethodLabel } from "./report-logic.js";
-import { parseImport, parseAdminImport } from "./import-logic.js";
+import { parseImport, parseAdminImport, findDuplicates } from "./import-logic.js";
 import { readSpreadsheet, downloadTemplate } from "./sheet.js";
 import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
@@ -596,7 +596,7 @@ function assetForm(existing) {
     (archivedCurrent ? `<option value="${esc(existing.category)}" selected>${esc(existing.category)} (archived)</option>` : "") +
     types.map((t) => `<option value="${esc(t.name)}" ${startCat === t.name ? "selected" : ""}>${esc(t.name)}</option>`).join("") +
     (editing ? "" : `<option value="__new__" ${startCat === "__new__" ? "selected" : ""}>＋ New asset type…</option>`);
-  const detail = (k, label, extra = "") => `<label class="f" data-field="${k}">${label} <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="${k}" value="${esc(a[k])}" ${extra} /></label>`;
+  const detail = (k, label, extra = "") => `<label class="f" data-field="${k}">${label} <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="${k}" value="${esc(a[k])}" ${extra} /><span class="dup-warn err-text" data-dup="${k}" style="text-transform:none;font-weight:600"></span></label>`;
 
   formDialog({
     title: editing ? `Edit ${existing.id}` : "Add asset",
@@ -637,6 +637,18 @@ function assetForm(existing) {
           idEl.value = prefixOf(t) ? nextAssetId(prefixOf(t), padOf(t)) : "";
         }
       };
+      // Warn as soon as a phone number, IMEI or serial matches another asset
+      const checkDups = () => {
+        const vals = Object.fromEntries(["imei", "serial", "phoneNumber"].map((k) => [k, f.elements[k]?.value ?? ""]));
+        const dups = findDuplicates(cache.assets, vals, editing ? existing.id : null);
+        $$("[data-dup]", f).forEach((el) => {
+          const d = dups.find((x) => x.field === el.dataset.dup);
+          el.textContent = d ? `Already on ${d.assetId}` : "";
+          f.elements[el.dataset.dup]?.classList.toggle("dup", !!d);
+        });
+      };
+      ["imei", "serial", "phoneNumber"].forEach((k) => f.elements[k].addEventListener("input", checkDups));
+      checkDups();
       sel.addEventListener("change", sync);
       f.elements.newTypePrefix.addEventListener("input", sync);
       f.elements.newTypePad.addEventListener("input", sync);
@@ -648,6 +660,8 @@ function assetForm(existing) {
       let category = str(fd, "category");
       const hidden = new Set($$("[data-field].hidden", $("#dlgForm")).map((el) => el.dataset.field));
       const vals = Object.fromEntries(DETAIL_FIELDS.map(([k]) => [k, hidden.has(k) ? (existing?.[k] ?? "") : str(fd, k)]));
+      const dups = findDuplicates(cache.assets, vals, editing ? existing.id : null);
+      if (dups.length) throw new Error(dups.map((d) => `The ${d.label} ${d.value} is already on ${d.assetId}.`).join(" ") + " Check for a typo, or edit that asset instead.");
 
       if (editing) {
         if (!category) throw new Error("Pick an asset type.");
@@ -914,6 +928,7 @@ function importDialog(kind) {
     const existing = new Set([...cache.assets.map((x) => x.id), ...cache.staff.map((x) => x.id), ...cache.staff.map((x) => x.badgeId).filter(Boolean)]);
     parsed = parseImport(kind, rowsNow(), {
       existingIds: existing, pad: S.ASSET_ID_PAD,
+      existingAssets: cache.assets,
       existingStaff: new Map(cache.staff.map((x) => [x.id, { name: x.name, badgeId: x.badgeId || "" }])),
       knownTypes: activeTypes().map((t) => ({ name: t.name, prefix: prefixOf(t), pad: padOf(t) })),
       defaultType: $("#impDefault")?.value || "",
