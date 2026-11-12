@@ -1,11 +1,13 @@
-// Pure CSV-import parsing (no Firebase) — unit tested in tests/.
+// Pure spreadsheet-import parsing (no Firebase) — unit tested in tests/.
+// Works on rows read from a CSV, a pasted table or an Excel sheet (array of arrays; first row = header).
 import { norm, validId, derivePrefix, nextIdFor } from "./util.js";
 
 const key = (s) => String(s ?? "").toLowerCase().replace(/[^a-z0-9]/g, "");
 
 const COLS = {
   staff: {
-    id: ["employeeid", "empid", "id", "badge", "badgeid", "employeenumber"],
+    id: ["employeeid", "empid", "eid", "employeenumber", "employeeno", "id"],
+    badge: ["badgeid", "badgenumber", "badgeno", "badge", "badgebarcode", "badgecode", "idbadge", "cardnumber"],
     name: ["name", "fullname", "employeename"],
     first: ["firstname", "first"],
     last: ["lastname", "last", "surname"],
@@ -18,6 +20,11 @@ const COLS = {
     serial: ["serialnumber", "serial", "sn", "serialno"],
     phoneNumber: ["phonenumber", "number", "phone", "mobile", "line"],
   },
+  admin: {
+    email: ["email", "emailaddress", "mail"],
+    name: ["name", "fullname"],
+    role: ["role", "type", "access"],
+  },
 };
 
 const findCol = (header, names) => {
@@ -28,36 +35,43 @@ const findCol = (header, names) => {
   return -1;
 };
 
+const cellOf = (r, i) => (i === -1 ? "" : String(r[i] ?? "").trim());
+const BAD_ID = (v) => `“${v}” has characters we can't use (letters, numbers, . - _ only).`;
+
 /**
  * rows         : array of arrays (first row = header)
- * existingIds  : Set<string> of every ID already used by an asset OR a staff member
- * knownTypes   : [{name, prefix}] existing asset types
+ * existingIds  : Set<string> of every ID already used by an asset, a staff member OR a badge number
+ * existingStaff: Map<employeeId, {name, badgeId}>   (staff import: lets a file fill in badge numbers)
+ * knownTypes   : [{name, prefix, pad}] existing asset types
  * defaultType  : asset type name for rows that don't specify one
- * returns      : {records, errors:[{line,message}], newTypes:[name], fatal?:string}
+ * returns      : {records, updates, errors:[{line,message}], newTypes:[name], fatal?:string}
+ *   staff: records = new people, updates = existing people getting a badge number
  */
-export function parseImport(kind, rows, { existingIds = new Set(), pad = 3, knownTypes = [], defaultType = "" } = {}) {
+export function parseImport(kind, rows, { existingIds = new Set(), existingStaff = new Map(), pad = 3, knownTypes = [], defaultType = "" } = {}) {
   const errors = [];
-  if (!rows.length) return { records: [], errors, newTypes: [], fatal: "Nothing to import." };
+  const none = { records: [], updates: [], errors, newTypes: [] };
+  if (!rows.length) return { ...none, fatal: "Nothing to import." };
 
   const header = rows[0].map(key);
   const spec = COLS[kind];
   const idx = Object.fromEntries(Object.entries(spec).map(([f, names]) => [f, findCol(header, names)]));
 
   if (kind === "staff") {
-    if (idx.id === -1) return { records: [], errors, newTypes: [], fatal: "Couldn't find an employee ID column. Name it “employeeId”." };
-    if (idx.name === -1 && (idx.first === -1 || idx.last === -1))
-      return { records: [], errors, newTypes: [], fatal: "Couldn't find a name column. Use “name”, or “firstName” and “lastName”." };
+    if (idx.id === -1) return { ...none, fatal: "Couldn't find an employee ID column. Name it “employeeId”." };
+    if (idx.name === -1 && (idx.first === -1 || idx.last === -1) && idx.badge === -1)
+      return { ...none, fatal: "Couldn't find a name column. Use “name”, or “firstName” and “lastName”. (A file with just employeeId and badgeId can only add badge numbers to people who already exist.)" };
   } else if (Object.values(idx).every((i) => i === -1)) {
-    return { records: [], errors, newTypes: [], fatal: "Couldn't recognise any columns. Use: assetId, assetType, model, imei, serial, phoneNumber." };
+    return { ...none, fatal: "Couldn't recognise any columns. Use: assetId, assetType, model, imei, serial, phoneNumber." };
   }
 
-  const cell = (r, i) => (i === -1 ? "" : (r[i] ?? "").trim());
-  const seen = new Set();
+  const cell = (r, i) => cellOf(r, i);
+  const seen = new Set();          // ids claimed by earlier rows in this file
   const records = [];
-  const pending = []; // asset rows needing an auto ID
+  const updates = [];
+  const pending = [];              // asset rows needing an auto ID
 
   const known = new Map(knownTypes.map((t) => [t.name.toLowerCase(), t]));
-  const newTypes = new Map(); // lower → name as typed
+  const newTypes = new Map();      // lower → name as typed
   const canonicalType = (raw) => {
     const name = (raw || defaultType || "").trim();
     if (!name) return "";
@@ -66,7 +80,9 @@ export function parseImport(kind, rows, { existingIds = new Set(), pad = 3, know
     if (!newTypes.has(k)) newTypes.set(k, name);
     return newTypes.get(k);
   };
-  const prefixFor = (name) => known.get(name.toLowerCase())?.prefix || derivePrefix(name);
+  const typeInfo = (name) => known.get(name.toLowerCase());
+  const prefixFor = (name) => (typeInfo(name) ? typeInfo(name).prefix ?? "" : derivePrefix(name));
+  const padFor = (name) => (typeInfo(name)?.pad ?? pad);
 
   rows.slice(1).forEach((r, n) => {
     const line = n + 2;
@@ -74,13 +90,39 @@ export function parseImport(kind, rows, { existingIds = new Set(), pad = 3, know
 
     if (kind === "staff") {
       const name = idx.name !== -1 ? cell(r, idx.name) : `${cell(r, idx.first)} ${cell(r, idx.last)}`.trim();
+      const badge = norm(cell(r, idx.badge));
       if (!rawId) return errors.push({ line, message: "Missing employee ID." });
-      if (!validId(rawId)) return errors.push({ line, message: `“${rawId}” has characters we can't use (letters, numbers, . - _ only).` });
-      if (!name) return errors.push({ line, message: `${rawId}: missing name.` });
-      if (existingIds.has(rawId)) return errors.push({ line, message: `${rawId} already exists — skipped.` });
+      if (!validId(rawId)) return errors.push({ line, message: BAD_ID(rawId) });
+      if (badge && !validId(badge)) return errors.push({ line, message: `${rawId}: badge number ${BAD_ID(badge)}` });
+      if (badge && badge === rawId) return errors.push({ line, message: `${rawId}: the badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.` });
+
+      const badgeClash = () => {
+        if (!badge) return null;
+        if (seen.has(badge)) return `${rawId}: badge number ${badge} is used twice in the file.`;
+        if (existingIds.has(badge) && existingStaff.get(rawId)?.badgeId !== badge) return `${rawId}: badge number ${badge} is already used by someone or something else.`;
+        return null;
+      };
+
+      // Existing person → this row can fill in their badge number
+      if (existingStaff.has(rawId)) {
+        const cur = existingStaff.get(rawId);
+        if (!badge) return errors.push({ line, message: `${rawId} already exists — skipped.` });
+        if (cur.badgeId === badge) return errors.push({ line, message: `${rawId} already has badge ${badge} — skipped.` });
+        const clash = badgeClash();
+        if (clash) return errors.push({ line, message: clash });
+        seen.add(rawId); seen.add(badge);
+        updates.push({ id: rawId, name: cur.name, badgeId: badge, previous: cur.badgeId || "" });
+        return;
+      }
+
+      if (existingIds.has(rawId)) return errors.push({ line, message: `${rawId} is already used by a device — skipped.` });
       if (seen.has(rawId)) return errors.push({ line, message: `${rawId} appears twice in the file — skipped.` });
+      if (!name) return errors.push({ line, message: `${rawId}: missing name.` });
+      const clash = badgeClash();
+      if (clash) return errors.push({ line, message: clash });
       seen.add(rawId);
-      records.push({ id: rawId, name });
+      if (badge) seen.add(badge);
+      records.push({ id: rawId, name, badgeId: badge });
       return;
     }
 
@@ -88,8 +130,12 @@ export function parseImport(kind, rows, { existingIds = new Set(), pad = 3, know
     if (!assetType) return errors.push({ line, message: `${rawId || "Row"}: missing asset type (add an assetType column or choose a default).` });
     const rec = { assetType, model: cell(r, idx.model), imei: cell(r, idx.imei), serial: cell(r, idx.serial), phoneNumber: cell(r, idx.phoneNumber) };
 
-    if (!rawId) { pending.push({ line, rec }); return; }
-    if (!validId(rawId)) return errors.push({ line, message: `“${rawId}” has characters we can't use (letters, numbers, . - _ only).` });
+    if (!rawId) {
+      if (!prefixFor(assetType)) return errors.push({ line, message: `${assetType} has no ID prefix, so this row needs an assetId.` });
+      pending.push({ line, rec });
+      return;
+    }
+    if (!validId(rawId)) return errors.push({ line, message: BAD_ID(rawId) });
     if (existingIds.has(rawId)) return errors.push({ line, message: `${rawId} already exists — skipped.` });
     if (seen.has(rawId)) return errors.push({ line, message: `${rawId} appears twice in the file — skipped.` });
     seen.add(rawId);
@@ -98,12 +144,88 @@ export function parseImport(kind, rows, { existingIds = new Set(), pad = 3, know
 
   // Pass 2: auto-number blank asset IDs, per type prefix, after the highest existing/explicit number
   for (const { rec } of pending) {
-    const id = nextIdFor(prefixFor(rec.assetType), pad, [...existingIds, ...seen]);
+    const id = nextIdFor(prefixFor(rec.assetType), padFor(rec.assetType), [...existingIds, ...seen]);
     seen.add(id);
     records.push({ id, ...rec });
   }
 
   // Only report new types that are actually used by a kept record
   const used = new Set(records.map((r) => r.assetType?.toLowerCase()));
-  return { records, errors, newTypes: [...newTypes.entries()].filter(([k]) => used.has(k)).map(([, v]) => v) };
+  return { records, updates, errors, newTypes: [...newTypes.entries()].filter(([k]) => used.has(k)).map(([, v]) => v) };
 }
+
+/**
+ * Admin / station-login sheet: email, name, optional role ("admin" or "station"; default admin).
+ * existingEmails : Set<string> lower-case emails that already have an admin or station record
+ */
+export function parseAdminImport(rows, { existingEmails = new Set() } = {}) {
+  const errors = [];
+  if (!rows.length) return { records: [], errors, fatal: "Nothing to import." };
+  const header = rows[0].map(key);
+  const idx = Object.fromEntries(Object.entries(COLS.admin).map(([f, names]) => [f, findCol(header, names)]));
+  if (idx.email === -1) return { records: [], errors, fatal: "Couldn't find an email column. Name it “email”." };
+
+  const seen = new Set();
+  const records = [];
+  rows.slice(1).forEach((r, n) => {
+    const line = n + 2;
+    const email = cellOf(r, idx.email).toLowerCase();
+    const name = cellOf(r, idx.name);
+    const roleRaw = cellOf(r, idx.role).toLowerCase();
+    if (!email) return errors.push({ line, message: "Missing email." });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return errors.push({ line, message: `“${email}” doesn't look like an email address.` });
+    if (existingEmails.has(email)) return errors.push({ line, message: `${email} already has a login — skipped.` });
+    if (seen.has(email)) return errors.push({ line, message: `${email} appears twice in the file — skipped.` });
+    let role = "admin";
+    if (roleRaw) {
+      if (/^(station|scan|scanner|kiosk)/.test(roleRaw)) role = "station";
+      else if (/^(admin|administrator)/.test(roleRaw)) role = "admin";
+      else return errors.push({ line, message: `${email}: role “${roleRaw}” isn't recognised. Use admin or station.` });
+    }
+    if (!name) return errors.push({ line, message: `${email}: missing name.` });
+    seen.add(email);
+    records.push({ email, name, role });
+  });
+  return { records, errors };
+}
+
+/** Blank-template definitions for the "Download template" buttons: header row + a notes sheet. */
+export const TEMPLATES = {
+  staff: {
+    file: "staff-template",
+    headers: ["employeeId", "badgeId", "name"],
+    notes: [
+      ["Staff import: how to fill this in"],
+      ["employeeId", "Required. The employee ID. Letters, numbers, dot, dash or underscore only."],
+      ["badgeId", "Optional. The number the ID badge barcode reads (usually the employee ID plus a few digits). Leave blank if the badge shows the employee ID."],
+      ["name", "Required for new people. You can use firstName and lastName columns instead."],
+      [""],
+      ["If an employeeId already exists and you give a badgeId, that person's badge number is filled in. Nothing else about them changes."],
+      ["Format the ID columns as Text so leading zeros are kept. Only the first sheet is imported."],
+    ],
+  },
+  asset: {
+    file: "assets-template",
+    headers: ["assetId", "assetType", "model", "imei", "serial", "phoneNumber"],
+    notes: [
+      ["Asset import: how to fill this in"],
+      ["assetType", "Required. For example Rover phone, iPad or Fob. A type that doesn't exist yet is created for you."],
+      ["assetId", "Optional. The barcode text, such as R1 or FOB-12. Leave blank to auto-number from the type's ID prefix (a type with no prefix needs an ID)."],
+      ["model, imei, serial, phoneNumber", "All optional. Leave them blank for simple items like fobs."],
+      [""],
+      ["IDs that already exist are skipped. Format the ID columns as Text so leading zeros are kept. Only the first sheet is imported."],
+    ],
+  },
+  admin: {
+    file: "admins-template",
+    headers: ["email", "name", "role"],
+    notes: [
+      ["Admin import: how to fill this in"],
+      ["email", "Required. Each person is emailed a link to set their own password."],
+      ["name", "Required. A person's name, or a label for a station login such as Dispatch desk."],
+      ["role", "Optional. admin (full access) or station (scan screen only). Blank means admin."],
+      [""],
+      ["Emails that already have a login are skipped. Only the first sheet is imported."],
+    ],
+  },
+};

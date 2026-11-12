@@ -50,6 +50,11 @@
     .keypad { display: grid; grid-template-columns: repeat(3, 92px); gap: 10px; justify-content: center; }
     .keypad button { font-size: 28px; font-weight: 700; padding: 14px 0; border-radius: 14px; justify-content: center; }
     .issue-hint { margin-top: 10px; }
+    .report-panel { width: min(640px, 100%); margin: 14px auto 0; display: grid; gap: 10px; }
+    .report-panel input { font-size: 20px; padding: 14px 16px; text-align: center; }
+    .report-panel .row { justify-content: center; }
+    .warn-btn { background: rgba(245,158,11,.14); border-color: rgba(245,158,11,.5); color: #fbbf24; }
+    body.kiosk .report-panel input { font-size: 28px; }
     select, textarea { width: 100%; }
 
     /* Kiosk mode: bigger, calmer, nothing to wander off to. Exit: click the clock 5 times, or Ctrl+Shift+K. */
@@ -110,6 +115,11 @@
         <div class="sub" id="stSub"></div>
         <div class="pins hidden" id="stPins" aria-hidden="true"></div>
         <button class="btn sm issue-hint hidden" id="issueHint" type="button"></button>
+        <form id="reportPanel" class="report-panel hidden" autocomplete="off">
+          <input id="rNote" type="text" maxlength="300" placeholder="e.g. cracked screen, won't charge, case missing" aria-label="What is wrong with the device" />
+          <div class="row"><button class="btn primary" type="submit">Next</button><button class="btn ghost" type="button" id="reportCancel">Cancel</button></div>
+          <div class="err-text" id="rErr"></div>
+        </form>
         <div class="bar"><i id="stBar"></i></div>
       </section>
 
@@ -131,7 +141,7 @@
           <details class="manual" id="manual">
             <summary><span class="chip blue">Manual</span> Scanner not working? Type the IDs instead</summary>
             <form id="manualForm" class="form-grid" style="grid-template-columns:1fr">
-              <label class="f">Employee ID <span style="text-transform:none;font-weight:400">(leave blank to return a device)</span>
+              <label class="f">Badge or employee ID <span style="text-transform:none;font-weight:400">(leave blank to return a device)</span>
                 <input id="mEmp" type="text" autocomplete="off" autocapitalize="characters" />
               </label>
               <label class="f">Device ID <span style="text-transform:none;font-weight:400">(e.g. PH-001)</span>
@@ -143,27 +153,9 @@
         </div>
 
         <div class="card">
-          <details class="manual" id="issueBox">
-            <summary><span class="chip warn">Problem?</span> Report a problem with a device</summary>
-            <form id="issueForm" class="form-grid" style="grid-template-columns:1fr">
-              <label class="f">Device ID <input id="iDev" type="text" autocomplete="off" autocapitalize="characters" placeholder="e.g. PH-001" required /></label>
-              <label class="f">What's wrong?
-                <select id="iType" required>
-                  <option value="">Choose…</option>
-                  <option>Cracked or damaged screen</option>
-                  <option>Won't charge / battery problem</option>
-                  <option>Won't turn on / frozen</option>
-                  <option>Case or charger missing</option>
-                  <option>Dirty / needs cleaning</option>
-                  <option>Other</option>
-                </select>
-              </label>
-              <label class="f">Details (optional) <input id="iNote" type="text" autocomplete="off" maxlength="200" /></label>
-              <label class="f">Your employee ID <input id="iEmp" type="text" autocomplete="off" autocapitalize="characters" required /></label>
-              <button class="btn primary" type="submit" style="justify-content:center">Send report</button>
-              <div class="err-text" id="iErr"></div>
-            </form>
-          </details>
+          <h3 style="margin-bottom:6px">Something broken?</h3>
+          <p class="help" style="margin:0 0 10px;text-align:left">Scan the device, type what's wrong, then scan your badge. You'll be told where to leave it.</p>
+          <button class="btn warn-btn" id="reportBtn" type="button" style="width:100%;justify-content:center">Report a damaged device</button>
         </div>
 
         <div class="card">

@@ -155,7 +155,7 @@
             <div class="spacer"></div>
             <button class="btn primary" id="addAsset">+ Add asset</button>
             <button class="btn" id="manageTypes">Asset types</button>
-            <button class="btn" id="importAssets">Import CSV</button>
+            <button class="btn" id="importAssets">Import spreadsheet</button>
             <button class="btn" id="exportAssets">Export CSV</button>
           </div>
           <div class="toolbar">
@@ -185,11 +185,11 @@
             <h2>Staff</h2><span class="muted" id="staffCount"></span>
             <div class="spacer"></div>
             <button class="btn primary" id="addStaff">+ Add staff</button>
-            <button class="btn" id="importStaff">Import CSV</button>
+            <button class="btn" id="importStaff">Import spreadsheet</button>
             <button class="btn" id="exportStaff">Export CSV</button>
           </div>
           <div class="toolbar">
-            <input type="search" id="staffSearch" placeholder="Search name or employee ID…" />
+            <input type="search" id="staffSearch" placeholder="Search name, employee ID or badge number…" />
             <label class="chk"><input type="checkbox" id="staffRemoved" /> Show removed</label>
             <div class="spacer"></div>
             <button class="btn" id="pinRequireSel" disabled title="For PIN mode “Selected people”">Require PIN for selected</button>
@@ -197,7 +197,7 @@
             <button class="btn blue" id="printStaffSelected" disabled>Print barcodes…</button>
           </div>
           <div class="table-wrap"><table>
-            <thead><tr><th style="width:32px"><input type="checkbox" id="staffAll" title="Select all shown" /></th><th>Employee ID</th><th>Name</th><th>Status</th><th>PIN</th><th>Has device</th><th></th></tr></thead>
+            <thead><tr><th style="width:32px"><input type="checkbox" id="staffAll" title="Select all shown" /></th><th>Employee ID</th><th>Badge #</th><th>Name</th><th>Status</th><th>PIN</th><th>Has device</th><th></th></tr></thead>
             <tbody id="staffBody"></tbody>
           </table></div>
         </div>
@@ -286,7 +286,7 @@
       <!-- Admins -->
       <section id="tab-admins" class="tabpane hidden">
         <div class="card">
-          <div class="card-head"><h2>Administrators</h2><div class="spacer"></div><button class="btn primary" id="addAdmin">+ Add admin / station login</button></div>
+          <div class="card-head"><h2>Administrators</h2><div class="spacer"></div><button class="btn" id="importAdmins">Import spreadsheet</button><button class="btn primary" id="addAdmin">+ Add admin / station login</button></div>
           <div class="table-wrap"><table>
             <thead><tr><th>Name</th><th>Email</th><th>Status</th><th>Added</th><th></th></tr></thead>
             <tbody id="adminsBody"></tbody>

@@ -66,13 +66,16 @@ Edit the file in GitHub (pencil → Commit). Pages republishes in about a minute
 
 | What's scanned | Result |
 |---|---|
-| Badge → available device | **Checked out** to that person |
+| Badge **or employee ID** → available device | **Checked out** to that person |
 | Badge → the device they have | **Checked in** |
 | Device alone, currently out | **Checked in** for whoever had it |
 | Device alone, currently available | "Scan your ID first." |
 | Badge → device still out to someone else | **Allowed** (takeover). Opens an alert, see below |
 | Badge → a second device | Blocked (one per person; configurable) |
 | Inactive badge / out-of-service device / unknown code | Clear red message (lost devices say "marked LOST, tell your supervisor") |
+
+### Badge number vs employee ID
+A badge's barcode is usually the employee ID plus a few extra digits. Each person has an **employee ID** and, optionally, a **badge number** (Staff tab). At the station they can scan the badge *or* scan/type the employee ID; both find the same person. Every check-out and check-in records which one was used (**Badge**, **Employee ID**, or **Device only** when a device is returned by scanning it alone). It shows in the Reports activity table and CSV ("ID Used"), and the report's staff table counts badge scans vs ID entries per person. A badge number can't equal any other employee ID, device ID or badge number.
 
 The station resets 20 s after a badge scan; **Start over** / **Esc** resets immediately. **Manual** is there if the scanner breaks.
 
@@ -83,8 +86,8 @@ If a device is taken while still checked out to someone else, the station allows
 **Settings → PIN**: Off, Everyone, or Only selected people (tick people in **Staff**, then "Require PIN"). The first time someone needs a PIN they create one (4 to 6 digits) at the station. Only a salted hash is stored. Admins can reset a PIN (the person creates a new one next scan). Three wrong tries cancels that scan.
 *Honest limit:* this is a speed bump against someone scanning another person's badge, not strong security. The hash is checked in the browser.
 
-### Report a problem
-After a check-in, the station offers "Report a problem" (cracked screen, won't charge, etc.). Reports show in **Alerts → Reported problems** and in the bell count. Resolve them there, optionally sending the device for repair (takes it out of service).
+### Report a damaged device
+At the station press **Report a damaged device**: (1) scan the device, (2) type what's wrong, (3) scan your badge or enter your employee ID. The screen then says to place the device on your supervisor's desk. If the person reporting is the one holding the device, it is also checked back in. (After any check-in the station also offers a "Something wrong with…?" button that starts at step 2.) Reports show in **Alerts → Reported problems** and in the bell count. Resolve them there, optionally sending the device for repair (takes it out of service).
 
 ### Lost / retired devices
 **Assets → Take out of service…** with a reason: Lost, Stolen, Out for repair, Retired, Removed. The station then blocks it with a reason-specific message. **Restore** puts it back in service.
@@ -104,6 +107,21 @@ Station → **Kiosk** button: fullscreen, screen kept awake, remembered on that 
 Dashboard · Alerts · Assets · Staff · Inventory · Shift sweep · Reports · Admins · Changelog · Settings.
 Bulk label printing with saved templates is in Assets/Staff (tick rows → **Print N labels…**). CSV import for staff (`employeeId,name`) and assets (`assetId,assetType,model,imei,serial,phoneNumber`). "Remove" never erases anything; history is kept.
 
+## Admin portal notes
+- **Asset types** (*Assets → Asset types…*): categories such as Rover phone, iPad or Fob. The **ID prefix is optional**. It only starts the *suggested* next ID when you add an item: prefix `R` with 0 digits suggests `R1, R2, R3…`; prefix `PH-` with 3 digits suggests `PH-001`; no prefix means you type each ID. You can always type any ID. Each type also chooses which detail fields apply, so a **Fob** can have none. Every detail field (model, IMEI, serial, phone number) is optional.
+- **One of each kind:** a person can hold one device *per type* at a time, so a rover phone and a fob together is fine, two rover phones is not.
+- **Staff** have an employee ID, an optional badge number, and a name.
+- **Admins:** add one at a time, or import a spreadsheet.
+
+## Spreadsheet imports
+**Staff, Assets and Admins** each have an **Import spreadsheet** button, with **Download Excel template** and **Download CSV template** buttons for a blank, correctly headed file (the Excel one has an Instructions sheet; format the ID columns as Text in Excel so leading zeros are kept). Upload an Excel (`.xlsx`) or CSV file, or paste rows. The first row is headers; the first sheet is used. You get a preview of what will be added and what is skipped (and why) before anything is saved.
+
+| Import | Columns |
+|---|---|
+| Staff | `employeeId`, `name` (or `firstName` + `lastName`), optional `badgeId`. If the employee already exists and the row has a `badgeId`, their badge number is filled in and nothing else changes. To add badge numbers for everyone, import `employeeId` + `badgeId`. |
+| Assets | `assetType` (needed), optional `assetId` (blank = auto-number from the type's prefix; a type with no prefix needs an ID), `model`, `imei`, `serial`, `phoneNumber`. New asset types in the file are created. |
+| Admins | `email`, `name`, optional `role` (`admin` or `station`). Each person is emailed a link to set their own password. |
+
 ## Equipment
 USB barcode scanner in keyboard mode that sends Enter; thermal label printer (Code 128; 2.25×1.25 in is common) or plain paper; badges must carry a barcode (magstripe/RFID need a different reader); any computer with Chrome/Edge.
 
@@ -122,7 +140,7 @@ USB barcode scanner in keyboard mode that sends Enter; thermal label printer (Co
 - Do a real-browser pass on your own scanner and printer.
 
 ## Tests
-`npm test` runs the logic tests (scan rules, reports, CSV, labels, PIN, shifts, inventory).
+`npm test` runs the logic tests (scan rules, reports, CSV and spreadsheet imports, badge numbers, labels, PIN, shifts, inventory).
 
 ## Troubleshooting
 - *"Firebase isn't configured yet"*: paste your config into `docs/js/firebase-config.js`.
@@ -139,6 +157,7 @@ docs/                 the website (GitHub Pages serves this folder)
   admin.html, js/admin.js        admin portal
   print.html, js/print.js        label designer
   js/*-logic.js                  tested rules (scan, pin, shift, inventory, report, import, label)
+  js/sheet.js                    reads .xlsx/.csv uploads, builds the templates
 firestore.rules, firestore.indexes.json   paste/create in the Firebase console
 tests/
 ```

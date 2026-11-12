@@ -15,7 +15,9 @@ const ICONS = {
   error: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 8v5M12 16.5v.01"/><path d="M10.3 3.9L2.4 17.6A2 2 0 0 0 4.1 20.6h15.8a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>',
 };
 
-let pending = null;          // {id, name, source, rec, pin: null | {need, tries, first, verified, created}}
+let pending = null;          // {id, name, source, method, rec, pin: null | {need, tries, first, verified, created}}
+let report = null;           // damage report in progress: {step: "device"|"note"|"who"|"pin", asset, note}
+let reportTimer = null;
 let settings = normSettings(null);
 let unsubSettings = null;
 let hintTimer = null;
@@ -44,6 +46,7 @@ function setStage(kind, { title = "", name = "", sub = "" } = {}) {
 function clearTimers() {
   clearTimeout(pendingTimer);
   clearTimeout(resetTimer);
+  clearTimeout(reportTimer);
 }
 
 const scanEl = () => $("#scan");
@@ -68,11 +71,15 @@ function pinCopy(p) {
 
 function idle() {
   clearTimers();
+  clearTimeout(reportTimer);
+  report = null;
+  $("#reportPanel").classList.add("hidden");
+  $("#reportBtn").disabled = false;
   pending = null;
   setPinUi(false);
   setStage("idle", {
-    title: "Scan your ID badge",
-    sub: "To take a device, scan your ID and then the device. To return one, just scan the device.",
+    title: "Scan your badge or enter your employee ID",
+    sub: "To take a device, scan your badge (or type your employee ID), then scan the device. To return one, just scan the device.",
   });
   focusScan();
 }
@@ -96,12 +103,18 @@ function showPending() {
   focusScan();
 }
 
+/** After a wrong-PIN message: back to the PIN prompt (damage report) or the "scan the device" prompt. */
+function resumePending() {
+  if (report && pending) { setPinUi(pinActive()); return reportStage(`Hi, ${pending.name}`, pinActive() ? pinCopy(pending.pin) : "Sending…", PIN_SECONDS); }
+  showPending();
+}
+
 function showResult(kind, o, seconds = S.RESULT_SECONDS) {
   clearTimers();
   if (!(kind === "error" && o.keepPending && pending)) setPinUi(false);
   setStage(kind, o);
   beep(kind === "error" ? "error" : kind);
-  resetTimer = setTimeout(() => (pending && kind === "error" && o.keepPending ? showPending() : idle()), seconds * 1000);
+  resetTimer = setTimeout(() => (pending && kind === "error" && o.keepPending ? resumePending() : idle()), seconds * 1000);
   focusScan();
 }
 
@@ -111,7 +124,7 @@ const showError = (message, { title = "Can't do that", keepPending = false } = {
 };
 
 function focusScan() {
-  if ($("#manual").open || $("#issueBox").open) return;
+  if ($("#manual").open || (report && report.step === "note")) return;
   const s = $("#scan");
   if (document.activeElement !== s) s.focus({ preventScroll: true });
 }
@@ -121,8 +134,12 @@ async function lookup(code) {
   if (!validId(code)) return { kind: "unknown" };
   const a = await F.getDoc(F.doc(db, "assets", code));
   if (a.exists()) return { kind: "asset", rec: { id: a.id, ...a.data() } };
+  // Employee ID (the document id) …
   const s = await F.getDoc(F.doc(db, "staff", code));
-  if (s.exists()) return { kind: "employee", rec: { id: s.id, ...s.data() } };
+  if (s.exists()) return { kind: "employee", method: "eid", rec: { id: s.id, ...s.data() } };
+  // … or the longer number on their badge.
+  const b = await F.getDocs(F.query(F.collection(db, "staff"), F.where("badgeId", "==", code), F.limit(1)));
+  if (!b.empty) return { kind: "employee", method: "badge", rec: { id: b.docs[0].id, ...b.docs[0].data() } };
   return { kind: "unknown" };
 }
 
@@ -149,21 +166,22 @@ function enqueue(fn) {
 
 async function processCode(code, source) {
   hideHint();
+  if (report) return processReportScan(code, source);
   const found = await lookup(code);
   if (found.kind === "unknown")
-    return showError(`“${code}” isn't a known ID badge or device. Try again, or enter it manually below.`, { title: "Not recognised", keepPending: !!pending });
-  if (found.kind === "employee") return processEmployee(found.rec, source);
+    return showError(`“${code}” isn't a known badge, employee ID or device. Try again, or enter it manually below.`, { title: "Not recognised", keepPending: !!pending });
+  if (found.kind === "employee") return processEmployee(found.rec, source, found.method);
   return processAsset(found.rec, source);
 }
 
 /** Returns true when the employee is accepted and we're waiting for the device. */
-function processEmployee(rec, source) {
+function processEmployee(rec, source, method = "eid") {
   if (!rec.active) {
     showError(`${rec.name}'s ID is inactive. See your supervisor.`, { title: "ID not active" });
     return false;
   }
   const need = pinNeed(settings, rec);
-  pending = { id: rec.id, name: rec.name, source, rec, pin: need === "none" ? null : { need, tries: 0, first: null, verified: false, created: false } };
+  pending = { id: rec.id, name: rec.name, source, method, rec, pin: need === "none" ? null : { need, tries: 0, first: null, verified: false, created: false } };
   beep("ok");
   showPending();
   return true;
@@ -171,8 +189,9 @@ function processEmployee(rec, source) {
 
 async function processAsset(asset, source) {
   if (pinActive()) return showError("Enter your PIN first, then scan the device.", { title: "PIN needed", keepPending: true });
-  const employee = pending ? { id: pending.id, name: pending.name } : null;
-  const held = employee && !S.ALLOW_MULTIPLE_PER_EMPLOYEE ? await devicesHeldBy(employee.id) : [];
+  const employee = pending ? { id: pending.id, name: pending.name, method: pending.method } : null;
+  // One device per person *of the same kind*: someone can hold a phone and a fob at once.
+  const held = employee && !S.ALLOW_MULTIPLE_PER_EMPLOYEE ? (await devicesHeldBy(employee.id)).filter((h) => (h.category || "") === (asset.category || "")) : [];
   const d = decide({ employee, asset, held, allowMultiple: S.ALLOW_MULTIPLE_PER_EMPLOYEE });
 
   if (d.action === "error") return showError(d.message, { title: titleFor(d.code, asset) });
@@ -210,7 +229,7 @@ async function handlePin(code) {
   const pin = p.pin;
 
   if (pin.need === "enter") {
-    if (await checkPin(code, p.rec)) { pin.verified = true; beep("ok"); return showPending(); }
+    if (await checkPin(code, p.rec)) { pin.verified = true; beep("ok"); return report ? submitReport() : showPending(); }
     pin.tries++;
     if (pin.tries >= PIN_MAX_TRIES)
       return showError("Too many wrong PINs. Scan your ID to start over. If you forgot it, ask a supervisor to reset it.", { title: "PIN locked" });
@@ -231,50 +250,125 @@ async function handlePin(code) {
   p.rec.pinHash = hash; p.rec.pinSalt = salt;
   pin.verified = true; pin.created = true;
   beep("ok");
+  if (report) return submitReport();
   showPending();
 }
 
-// ───────── report a problem ─────────
+// ───────── report a damaged device ─────────
+// Three quick steps: scan the device, type what's wrong, scan your badge (or type your employee ID).
+// Then the screen says where to leave the device.
 function hideHint() { clearTimeout(hintTimer); $("#issueHint").classList.add("hidden"); }
-function offerIssue(assetId, empId) {
+function offerIssue(assetId) {
   const btn = $("#issueHint");
   btn.textContent = `Something wrong with ${assetId}? Report it`;
-  btn.dataset.asset = assetId; btn.dataset.emp = empId || "";
+  btn.dataset.asset = assetId;
   btn.classList.remove("hidden");
   clearTimeout(hintTimer);
   hintTimer = setTimeout(hideHint, 20000);
 }
-$("#issueHint").addEventListener("click", () => {
-  $("#iDev").value = $("#issueHint").dataset.asset || "";
-  $("#iEmp").value = $("#issueHint").dataset.emp || "";
-  $("#issueBox").open = true;
-  hideHint();
-  $("#iType").focus();
-});
-$("#issueBox").addEventListener("toggle", () => { if ($("#issueBox").open) { if (!$("#iDev").value) $("#iDev").focus(); } else focusScan(); });
 
-$("#issueForm").addEventListener("submit", (e) => {
-  e.preventDefault();
-  $("#iErr").textContent = "";
-  enqueue(async () => {
-    const dev = norm($("#iDev").value), emp = norm($("#iEmp").value), problem = $("#iType").value, note = $("#iNote").value.trim();
-    if (!dev || !emp || !problem) { $("#iErr").textContent = "Fill in the device, your ID and what's wrong."; throw Object.assign(new Error("handled"), { handled: true }); }
-    const [a, s] = await Promise.all([F.getDoc(F.doc(db, "assets", dev)), F.getDoc(F.doc(db, "staff", emp))]);
-    if (!a.exists()) { $("#iErr").textContent = `“${dev}” isn't a known device ID.`; throw Object.assign(new Error("handled"), { handled: true }); }
-    if (!s.exists() || s.data().active !== true) { $("#iErr").textContent = `“${emp}” isn't an active employee ID.`; throw Object.assign(new Error("handled"), { handled: true }); }
-    const ref = F.doc(F.collection(db, "issues"));
-    const b = F.writeBatch(db);
-    b.set(ref, {
-      status: "open", assetId: dev, assetModel: a.data().model || "", assetCategory: a.data().category || "",
-      problem, note, reportedById: emp, reportedByName: s.data().name, ts: F.serverTimestamp(),
-    });
-    await b.commit();
-    $("#issueForm").reset();
-    $("#issueBox").open = false;
-    showResult("in", { title: "REPORT SENT", name: s.data().name, sub: `${dev} · ${problem}\nAn admin will take a look.` }, S.RESULT_SECONDS + 2);
+function reportStage(title, sub, secs = 90) {
+  clearTimers();
+  clearTimeout(reportTimer);
+  setPinUi(pinActive());
+  setStage("pending", { title, name: "", sub });
+  const bar = $("#stBar");
+  bar.style.transition = "none"; bar.style.width = "100%"; void bar.offsetWidth;
+  bar.style.transition = `width ${secs}s linear`; bar.style.width = "0%";
+  reportTimer = setTimeout(idle, secs * 1000);
+}
+
+function startReport(asset = null) {
+  hideHint();
+  pending = null;
+  report = { step: "device", asset: null, note: "" };
+  $("#reportBtn").disabled = true;
+  if (asset) return reportNoteStep(asset);
+  setPinUi(false);
+  reportStage("Report a damaged device", "Step 1 of 3: scan the damaged device (or type its ID below and press Enter).");
+  focusScan();
+}
+
+function reportNoteStep(asset) {
+  report.asset = asset;
+  report.step = "note";
+  setPinUi(false);
+  reportStage(`What's wrong with ${asset.id}?`, "Step 2 of 3: type the problem, then press Enter.", 120);
+  $("#reportPanel").classList.remove("hidden");
+  $("#rNote").value = "";
+  $("#rErr").textContent = "";
+  $("#rNote").focus();
+}
+
+function reportWhoStep() {
+  report.step = "who";
+  $("#reportPanel").classList.add("hidden");
+  reportStage("Now scan your badge or enter your employee ID", `Step 3 of 3: this sends the report for ${report.asset.id}.`, 45);
+  focusScan();
+}
+
+/** The scan field is used while a report is open. */
+async function processReportScan(code, source) {
+  if (report.step === "device") {
+    const found = await lookup(code);
+    if (found.kind !== "asset") return reportStage("Report a damaged device", `“${code}” isn't a device. Scan the damaged device itself.`);
+    return reportNoteStep(found.rec);
+  }
+  if (report.step === "note" || report.step === "pin" || report.step === "saving") return; // typing the problem, entering a PIN, or already sending
+  // step "who"
+  const found = await lookup(code);
+  if (found.kind !== "employee") return reportStage("Now scan your badge or enter your employee ID", `“${code}” isn't a known badge or employee ID. Try again.`, 45);
+  if (!found.rec.active) return showError(`${found.rec.name}'s ID is inactive. See your supervisor.`, { title: "ID not active" });
+  const need = pinNeed(settings, found.rec);
+  pending = { id: found.rec.id, name: found.rec.name, source, method: found.method, rec: found.rec, pin: need === "none" ? null : { need, tries: 0, first: null, verified: false, created: false } };
+  report.step = "pin";
+  if (pending.pin) {
+    setPinUi(true);
+    return reportStage(`Hi, ${pending.name}`, pinCopy(pending.pin), PIN_SECONDS);
+  }
+  return submitReport();
+}
+
+async function submitReport() {
+  const who = pending, { asset, note } = report;
+  const method = who.method;
+  report.step = "saving";
+  setPinUi(false);
+
+  // If they're holding the device they're reporting, hand it back in the same step.
+  const cur = (await F.getDoc(F.doc(db, "assets", asset.id))).data() || asset;
+  let returned = false;
+  if (cur.active && cur.status === "out" && cur.currentHolderId === who.id) {
+    await commit({ action: "checkin", note: "Returned with a damage report" }, { ...asset, ...cur, id: asset.id }, { id: who.id, name: who.name, method }, who.source === "manual" ? "manual" : "scan");
+    returned = true;
+  }
+  const b = F.writeBatch(db);
+  b.set(F.doc(F.collection(db, "issues")), {
+    status: "open", assetId: asset.id, assetModel: cur.model || "", assetCategory: cur.category || "",
+    problem: note, note: "", reportedById: who.id, reportedByName: who.name, reportedByMethod: method || null, returned, ts: F.serverTimestamp(),
   });
+  await b.commit();
+  report = null;
+  pending = null;
+  $("#reportBtn").disabled = false;
+  const seconds = Math.max(S.RESULT_SECONDS, 15);
+  showResult("in", {
+    title: "REPORT SENT",
+    name: who.name,
+    sub: `Please place ${asset.id} on your supervisor's desk.\nDon't put it back in the rack.\n\nProblem noted: ${note}`,
+  }, seconds);
+}
+
+$("#reportBtn").addEventListener("click", () => startReport());
+$("#issueHint").addEventListener("click", () => startReport({ id: $("#issueHint").dataset.asset }));
+$("#reportCancel").addEventListener("click", () => { scan.value = ""; idle(); });
+$("#reportPanel").addEventListener("submit", (e) => {
+  e.preventDefault();
+  const note = $("#rNote").value.trim();
+  if (!note) { $("#rErr").textContent = "Type what's wrong first."; return; }
+  report.note = note.slice(0, 300);
+  reportWhoStep();
 });
-$("#iDev").addEventListener("keydown", (e) => { if (e.key === "Enter") { e.preventDefault(); $("#iType").focus(); } }); // a scanner ends with Enter
 
 const appError = (message) => Object.assign(new Error("app"), { app: message });
 
@@ -307,7 +401,7 @@ async function commit(decision, asset, employee, source) {
         incidentId = incRef.id;
         tx.set(missedRef, {
           type: "missed", ...base, employeeId: cur.currentHolderId, employeeName: cur.currentHolderName,
-          handledById: employee.id, handledByName: employee.name, heldMinutes: mins, source, incidentId, ts: F.serverTimestamp(),
+          handledById: employee.id, handledByName: employee.name, idMethod: employee.method || null, heldMinutes: mins, source, incidentId, ts: F.serverTimestamp(),
         });
         tx.set(incRef, {
           status: "open", ...base, missedById: cur.currentHolderId, missedByName: cur.currentHolderName,
@@ -322,7 +416,7 @@ async function commit(decision, asset, employee, source) {
       });
       tx.set(logRef, {
         type: "out", ...base, employeeId: employee.id, employeeName: employee.name,
-        handledById: employee.id, handledByName: employee.name, heldMinutes: null, source,
+        handledById: employee.id, handledByName: employee.name, idMethod: employee.method || null, heldMinutes: null, source,
         takeoverFromId: takeover ? cur.currentHolderId : null, takeoverFromName: takeover ? cur.currentHolderName : null,
         incidentId, ts: F.serverTimestamp(),
       });
@@ -336,7 +430,7 @@ async function commit(decision, asset, employee, source) {
       tx.set(logRef, {
         type: "in", ...base, employeeId: cur.currentHolderId, employeeName: cur.currentHolderName,
         handledById: employee?.id || cur.currentHolderId, handledByName: employee?.name || cur.currentHolderName,
-        heldMinutes: minutes, source, ts: F.serverTimestamp(),
+        idMethod: employee?.method || null, heldMinutes: minutes, source, ...(decision.note ? { note: decision.note } : {}), ts: F.serverTimestamp(),
       });
       out = { kind: "in", holderName: cur.currentHolderName, holderId: cur.currentHolderId, minutes };
     }
@@ -448,8 +542,8 @@ $("#manualForm").addEventListener("submit", (e) => {
   enqueue(async () => {
     if (emp) {
       const r = await lookup(emp);
-      if (r.kind !== "employee") return showError(`“${emp}” isn't a known employee ID.`, { title: "Not recognised" });
-      if (!processEmployee(r.rec, "manual")) return;
+      if (r.kind !== "employee") return showError(`“${emp}” isn't a known employee ID or badge number.`, { title: "Not recognised" });
+      if (!processEmployee(r.rec, "manual", r.method)) return;
       if (pinActive()) return; // they now need to enter their PIN; the device is scanned afterwards
     }
     if (ph) {
@@ -466,7 +560,7 @@ $("#manual").addEventListener("toggle", () => { if ($("#manual").open) $("#mEmp"
 
 // keep the scanner field focused so a scan always lands somewhere
 setInterval(() => {
-  if ($("#app").classList.contains("hidden") || $("#manual").open || $("#issueBox").open) return;
+  if ($("#app").classList.contains("hidden") || $("#manual").open || (report && report.step === "note")) return;
   const t = document.activeElement?.tagName;
   if (t !== "INPUT" && t !== "TEXTAREA" && t !== "SUMMARY") focusScan();
 }, 700);

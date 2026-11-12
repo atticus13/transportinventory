@@ -74,7 +74,8 @@ service cloud.firestore {
         && request.resource.data.ts == request.time
         && request.resource.data.type in ['in', 'out', 'missed']
         && request.resource.data.assetId is string
-        && request.resource.data.employeeId is string;
+        && request.resource.data.employeeId is string
+        && request.resource.data.get('idMethod', null) in ['badge', 'eid', null];   // how the person identified themselves
       allow update, delete: if false;
     }
 

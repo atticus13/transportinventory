@@ -1,8 +1,9 @@
 import { auth, db, A, F, appMod, firebaseConfig, configured, friendlyAuthError } from "./fb.js";
 import { SETTINGS as S } from "./firebase-config.js";
 import { $, $$, esc, norm, validId, toDate, fmtDT, fmtFull, fmtDur, ymd, rangeFromInputs, toCSV, downloadFile, parseCSV, toast, slugify, derivePrefix, nextIdFor, beep } from "./util.js";
-import { normalizeLog, summarize, ACTIVITY_HEADERS, activityRows } from "./report-logic.js";
-import { parseImport } from "./import-logic.js";
+import { normalizeLog, summarize, ACTIVITY_HEADERS, activityRows, idMethodLabel } from "./report-logic.js";
+import { parseImport, parseAdminImport } from "./import-logic.js";
+import { readSpreadsheet, downloadTemplate } from "./sheet.js";
 import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
@@ -359,14 +360,21 @@ $("#loadResolved").addEventListener("click", async () => {
 // ═════════════════════════ asset types ═════════════════════════
 const activeTypes = () => cache.types.filter((t) => t.active);
 const typeByName = (n) => cache.types.find((t) => t.name.toLowerCase() === String(n ?? "").toLowerCase());
-const prefixOf = (t) => t?.prefix || derivePrefix(t?.name);
-const PREFIX_RE = /^[A-Z0-9._-]{1,10}$/;
-const nextAssetId = (prefix) => nextIdFor(prefix, S.ASSET_ID_PAD, [...cache.assets.map((a) => a.id), ...cache.staff.map((s) => s.id)]);
+// The ID prefix is optional. It only decides how the "next ID" suggestion starts (R → R1, R2…).
+// A type with an empty prefix gets no suggestion: you type each ID yourself.
+const prefixOf = (t) => (typeof t?.prefix === "string" ? t.prefix : derivePrefix(t?.name));
+const padOf = (t) => (Number.isInteger(t?.pad) && t.pad >= 0 && t.pad <= 6 ? t.pad : S.ASSET_ID_PAD);
+const DETAIL_FIELDS = [["model", "Model"], ["phoneNumber", "Phone number"], ["imei", "IMEI"], ["serial", "Serial number"]];
+const fieldsOf = (t) => (Array.isArray(t?.fields) ? t.fields : DETAIL_FIELDS.map(([k]) => k));
+const PREFIX_RE = /^[A-Z0-9._-]{0,10}$/;
+const nextAssetId = (prefix, pad = S.ASSET_ID_PAD) => nextIdFor(prefix, pad, [...cache.assets.map((a) => a.id), ...cache.staff.map((s) => s.id), ...cache.staff.map((s) => s.badgeId).filter(Boolean)]);
+const checkedFields = (root) => DETAIL_FIELDS.map(([k]) => k).filter((k) => root.querySelector(`[data-tf="${k}"]`)?.checked);
+const fieldBoxes = (fields) => DETAIL_FIELDS.map(([k, l]) => `<label class="chk"><input type="checkbox" data-tf="${k}" ${fields.includes(k) ? "checked" : ""} /> ${l}</label>`).join(" ");
 
-const typeCreateOp = ({ name, prefix }) => ({
+const typeCreateOp = ({ name, prefix, pad = S.ASSET_ID_PAD, fields = DETAIL_FIELDS.map(([k]) => k) }) => ({
   ref: F.doc(db, "assetTypes", slugify(name)), mode: "set",
-  data: { name, prefix, active: true, createdAt: now(), updatedAt: now() },
-  audit: { action: "assetType.create", targetType: "assetType", targetId: slugify(name), summary: `Created asset type “${name}” (IDs start ${prefix})`, before: null, after: { name, prefix } },
+  data: { name, prefix, pad, fields, active: true, createdAt: now(), updatedAt: now() },
+  audit: { action: "assetType.create", targetType: "assetType", targetId: slugify(name), summary: `Created asset type “${name}”${prefix ? ` (IDs start ${prefix})` : " (no ID prefix)"}${fields.length ? "" : " with no extra detail fields"}`, before: null, after: { name, prefix, pad, fields } },
 });
 
 function typeSelects() {
@@ -384,19 +392,26 @@ function typesDialog() {
   d.onclose = null;
   const draw = () => {
     d.innerHTML = `<h2>Asset types</h2>
-      <p class="muted" style="margin-top:0">Categories such as Phone or iPad. The prefix starts each barcode ID (Phone → PH-001). Types are archived, never deleted.</p>
-      <div class="table-wrap"><table><thead><tr><th>Type</th><th>ID prefix</th><th>Active assets</th><th></th></tr></thead><tbody id="typeRows">
+      <p class="muted" style="margin-top:0">Categories such as Rover phone, iPad or Fob. The <b>ID prefix</b> is optional: it only starts the suggested ID when you add an item (prefix <span class="mono">R</span> with 0 digits suggests R1, R2, R3…; prefix <span class="mono">PH-</span> with 3 digits suggests PH-001). Leave it empty to type every ID yourself. Tick only the detail fields that make sense for the type. Types are archived, never deleted.</p>
+      <div class="table-wrap"><table><thead><tr><th>Type</th><th>ID prefix</th><th>Digits</th><th>Detail fields</th><th>Active</th><th></th></tr></thead><tbody id="typeRows">
       ${cache.types.map((t) => {
         const n = cache.assets.filter((a) => a.active && a.category === t.name).length;
         return `<tr class="${t.active ? "" : "dim"}" data-id="${esc(t.id)}"><td><b>${esc(t.name)}</b>${t.active ? "" : ' <span class="chip off">Archived</span>'}</td>
-          <td><input data-prefix class="mono" value="${esc(prefixOf(t))}" style="width:96px;padding:5px 8px" /></td><td>${n}</td>
-          <td class="actions"><button class="btn sm" data-act="prefix">Save prefix</button>
+          <td><input data-prefix class="mono" value="${esc(prefixOf(t))}" placeholder="(none)" style="width:84px;padding:5px 8px" /></td>
+          <td><input data-pad type="number" min="0" max="6" value="${padOf(t)}" style="width:58px;padding:5px 8px" /></td>
+          <td style="white-space:normal">${fieldBoxes(fieldsOf(t))}</td><td>${n}</td>
+          <td class="actions"><button class="btn sm" data-act="save">Save</button>
           ${t.active ? '<button class="btn sm danger" data-act="archive">Archive</button>' : '<button class="btn sm" data-act="restore">Restore</button>'}</td></tr>`;
-      }).join("") || emptyRow(4, "No asset types yet. Add your first below (e.g. Phone).")}</tbody></table></div>
-      <form id="typeForm" class="form-grid" style="margin-top:14px;grid-template-columns:2fr 1fr auto;align-items:end">
-        <label class="f">New type<input name="name" placeholder="e.g. iPad" required /></label>
-        <label class="f">ID prefix<input name="prefix" placeholder="auto" /></label>
-        <button class="btn primary" type="submit">Add type</button></form>
+      }).join("") || emptyRow(6, "No asset types yet. Add your first below (e.g. Rover phone).")}</tbody></table></div>
+      <form id="typeForm" style="margin-top:14px">
+        <div class="form-grid" style="grid-template-columns:2fr 1fr 1fr;align-items:end">
+          <label class="f">New type<input name="name" placeholder="e.g. Fob" required /></label>
+          <label class="f">ID prefix (optional)<input name="prefix" placeholder="e.g. F" /></label>
+          <label class="f">Digits<input name="pad" type="number" min="0" max="6" value="0" /></label>
+        </div>
+        <div style="margin:10px 0 8px"><span class="muted">Detail fields:</span> ${fieldBoxes(DETAIL_FIELDS.map(([k]) => k))}</div>
+        <button class="btn primary" type="submit">Add type</button>
+      </form>
       <div class="err-text" id="typeErr" style="margin-top:8px"></div>
       <div class="foot"><button class="btn ghost" id="typeClose">Close</button></div>`;
     $("#typeClose").onclick = () => d.close();
@@ -408,9 +423,10 @@ function typesDialog() {
         const name = str(fd, "name");
         if (!slugify(name)) throw new Error("Enter a type name.");
         if (cache.types.some((t) => t.id === slugify(name))) throw new Error(`“${name}” already exists.`);
-        const prefix = norm(str(fd, "prefix")) || derivePrefix(name);
+        const prefix = norm(str(fd, "prefix"));
         if (!PREFIX_RE.test(prefix)) throw new Error("Prefix can use letters, numbers, dot, dash, underscore (10 max).");
-        await commit([typeCreateOp({ name, prefix })]);
+        const pad = Math.min(6, Math.max(0, parseInt(str(fd, "pad") || "0", 10) || 0));
+        await commit([typeCreateOp({ name, prefix, pad, fields: checkedFields(e.target) })]);
         toast(`Added type ${name}`, "ok");
         draw();
       } catch (err) { $("#typeErr").textContent = explain(err); }
@@ -422,13 +438,17 @@ function typesDialog() {
       const t = cache.types.find((x) => x.id === tr.dataset.id);
       $("#typeErr").textContent = "";
       try {
-        if (b.dataset.act === "prefix") {
+        if (b.dataset.act === "save") {
           const prefix = norm($("[data-prefix]", tr).value);
           if (!PREFIX_RE.test(prefix)) throw new Error("Prefix can use letters, numbers, dot, dash, underscore (10 max).");
-          if (prefix === prefixOf(t)) throw new Error("Prefix unchanged.");
-          await commit([{ ref: F.doc(db, "assetTypes", t.id), mode: "update", data: { prefix, updatedAt: now() },
-            audit: { action: "assetType.update", targetType: "assetType", targetId: t.id, summary: `Changed ${t.name} ID prefix ${prefixOf(t)} → ${prefix}`, before: { prefix: prefixOf(t) }, after: { prefix } } }]);
-          toast("Prefix saved. It applies to newly added assets.", "ok");
+          const pad = Math.min(6, Math.max(0, parseInt($("[data-pad]", tr).value || "0", 10) || 0));
+          const fields = checkedFields(tr);
+          const before = { prefix: prefixOf(t), pad: padOf(t), fields: fieldsOf(t) };
+          const after = { prefix, pad, fields };
+          if (JSON.stringify(before) === JSON.stringify(after)) throw new Error("Nothing changed.");
+          await commit([{ ref: F.doc(db, "assetTypes", t.id), mode: "update", data: { ...after, updatedAt: now() },
+            audit: { action: "assetType.update", targetType: "assetType", targetId: t.id, summary: `Changed ${t.name} type settings (prefix “${before.prefix}” → “${prefix}”, ${before.pad} → ${pad} digits, fields: ${fields.join(", ") || "none"})`, before, after } }]);
+          toast("Saved. Prefix and digits apply to newly added items.", "ok");
         } else {
           const active = b.dataset.act === "restore";
           if (!active && cache.assets.some((a) => a.active && a.category === t.name)) throw new Error(`${t.name} still has active assets. Move or remove them first.`);
@@ -450,7 +470,9 @@ const pickFields = (o, fields) => Object.fromEntries(fields.map((f) => [f, o?.[f
 function idOwner(id) {
   if (cache.assets.some((a) => a.id === id)) return `asset ${id}`;
   const s = cache.staff.find((x) => x.id === id);
-  return s ? `staff member ${s.name}` : null;
+  if (s) return `staff member ${s.name}`;
+  const b = cache.staff.find((x) => x.badgeId === id);
+  return b ? `${b.name}'s badge number` : null;
 }
 
 const assetCreateOp = (r) => ({
@@ -460,8 +482,12 @@ const assetCreateOp = (r) => ({
 });
 const staffCreateOp = (r) => ({
   ref: F.doc(db, "staff", r.id), mode: "set",
-  data: { name: r.name, active: true, createdAt: now(), updatedAt: now() },
-  audit: { action: "staff.create", targetType: "staff", targetId: r.id, summary: `Added staff member ${r.name} (${r.id})`, before: null, after: { name: r.name } },
+  data: { name: r.name, badgeId: r.badgeId || "", active: true, createdAt: now(), updatedAt: now() },
+  audit: { action: "staff.create", targetType: "staff", targetId: r.id, summary: `Added staff member ${r.name} (${r.id})${r.badgeId ? `, badge ${r.badgeId}` : ""}`, before: null, after: { name: r.name, badgeId: r.badgeId || "" } },
+});
+const staffBadgeOp = (s, badgeId) => ({
+  ref: F.doc(db, "staff", s.id), mode: "update", data: { badgeId, updatedAt: now() },
+  audit: { action: "staff.update", targetType: "staff", targetId: s.id, summary: `${badgeId ? (s.badgeId ? "Changed" : "Added") : "Cleared"} badge number for ${s.name} (${s.id})${badgeId ? `: ${badgeId}` : ""}`, before: { badgeId: s.badgeId || "" }, after: { badgeId } },
 });
 
 function shownAssets() {
@@ -570,43 +596,58 @@ function assetForm(existing) {
     (archivedCurrent ? `<option value="${esc(existing.category)}" selected>${esc(existing.category)} (archived)</option>` : "") +
     types.map((t) => `<option value="${esc(t.name)}" ${startCat === t.name ? "selected" : ""}>${esc(t.name)}</option>`).join("") +
     (editing ? "" : `<option value="__new__" ${startCat === "__new__" ? "selected" : ""}>＋ New asset type…</option>`);
+  const detail = (k, label, extra = "") => `<label class="f" data-field="${k}">${label} <span class="muted" style="text-transform:none;font-weight:400">(optional)</span><input name="${k}" value="${esc(a[k])}" ${extra} /></label>`;
 
   formDialog({
     title: editing ? `Edit ${existing.id}` : "Add asset",
     submit: editing ? "Save changes" : "Add asset",
     body: `<div class="form-grid">
         <label class="f">Asset type<select name="category">${options}</select></label>
-        <label class="f">Asset ID (the barcode)<input name="id" value="${esc(a.id)}" ${editing ? "disabled" : ""} required /></label>
+        <label class="f">Asset ID (the barcode)<input name="id" value="${esc(a.id)}" ${editing ? "disabled" : ""} required placeholder="e.g. R1, IP-001, FOB-12" /></label>
         <div id="newTypeBox" class="form-grid" style="grid-column:1/-1">
-          <label class="f">New type name<input name="newTypeName" placeholder="e.g. iPad" /></label>
-          <label class="f">ID prefix<input name="newTypePrefix" placeholder="auto" /></label>
+          <label class="f">New type name<input name="newTypeName" placeholder="e.g. Fob" /></label>
+          <label class="f">ID prefix (optional)<input name="newTypePrefix" placeholder="e.g. F" /></label>
+          <label class="f">Digits <span class="muted" style="text-transform:none;font-weight:400">(0 gives F1, F2; 3 gives F-001)</span><input name="newTypePad" type="number" min="0" max="6" value="0" /></label>
+          <label class="chk" style="grid-column:1/-1"><input type="checkbox" name="newTypeSimple" /> Simple item: no model, phone number, IMEI or serial (like a fob)</label>
         </div>
-        <label class="f">Model<input name="model" value="${esc(a.model)}" placeholder="e.g. iPhone 13, iPad 10th gen" /></label>
-        <label class="f">Phone number<input name="phoneNumber" value="${esc(a.phoneNumber)}" /></label>
-        <label class="f">IMEI<input name="imei" value="${esc(a.imei)}" inputmode="numeric" /></label>
-        <label class="f">Serial number<input name="serial" value="${esc(a.serial)}" /></label>
-      </div>${editing ? "" : '<p class="muted" style="font-size:13px;margin-bottom:0">The Asset ID is what gets printed on the label. It can’t be changed later.</p>'}`,
+        ${detail("model", "Model", 'placeholder="e.g. iPhone 13, iPad 10th gen"')}
+        ${detail("phoneNumber", "Phone number")}
+        ${detail("imei", "IMEI", 'inputmode="numeric"')}
+        ${detail("serial", "Serial number")}
+      </div>${editing ? "" : '<p class="muted" style="font-size:13px;margin-bottom:0">The Asset ID is what gets printed on the label. It can’t be changed later. Every detail field is optional.</p>'}`,
     onOpen: () => {
       const f = $("#dlgForm"), sel = f.elements.category, idEl = f.elements.id;
       let touched = false;
       const box = $("#newTypeBox");
       const sync = () => {
-        box.classList.toggle("hidden", sel.value !== "__new__");
+        const isNew = sel.value === "__new__";
+        box.classList.toggle("hidden", !isNew);
+        // Only show the detail fields this type uses (always show one that already has a value)
+        const fields = isNew ? (f.elements.newTypeSimple.checked ? [] : DETAIL_FIELDS.map(([k]) => k)) : fieldsOf(typeByName(sel.value));
+        $$("[data-field]", f).forEach((el) => {
+          const k = el.dataset.field;
+          el.classList.toggle("hidden", !(fields.includes(k) || (editing && existing[k])));
+        });
         if (editing || touched) return;
-        const prefix = sel.value === "__new__"
-          ? norm(f.elements.newTypePrefix.value) || derivePrefix(f.elements.newTypeName.value || "Asset")
-          : prefixOf(typeByName(sel.value));
-        idEl.value = nextAssetId(prefix);
+        if (isNew) {
+          const prefix = norm(f.elements.newTypePrefix.value);
+          idEl.value = prefix ? nextAssetId(prefix, Math.min(6, Math.max(0, parseInt(f.elements.newTypePad.value || "0", 10) || 0))) : "";
+        } else {
+          const t = typeByName(sel.value);
+          idEl.value = prefixOf(t) ? nextAssetId(prefixOf(t), padOf(t)) : "";
+        }
       };
       sel.addEventListener("change", sync);
-      f.elements.newTypeName.addEventListener("input", sync);
       f.elements.newTypePrefix.addEventListener("input", sync);
+      f.elements.newTypePad.addEventListener("input", sync);
+      f.elements.newTypeSimple.addEventListener("change", sync);
       idEl.addEventListener("input", () => (touched = true));
       sync();
     },
     onSubmit: async (fd) => {
-      const vals = { model: str(fd, "model"), imei: str(fd, "imei"), serial: str(fd, "serial"), phoneNumber: str(fd, "phoneNumber") };
       let category = str(fd, "category");
+      const hidden = new Set($$("[data-field].hidden", $("#dlgForm")).map((el) => el.dataset.field));
+      const vals = Object.fromEntries(DETAIL_FIELDS.map(([k]) => [k, hidden.has(k) ? (existing?.[k] ?? "") : str(fd, k)]));
 
       if (editing) {
         if (!category) throw new Error("Pick an asset type.");
@@ -626,13 +667,16 @@ function assetForm(existing) {
         const name = str(fd, "newTypeName");
         if (!slugify(name)) throw new Error("Enter a name for the new asset type.");
         if (cache.types.some((t) => t.id === slugify(name))) throw new Error(`“${name}” already exists as an asset type. Pick it from the list.`);
-        const prefix = norm(str(fd, "newTypePrefix")) || derivePrefix(name);
+        const prefix = norm(str(fd, "newTypePrefix"));
         if (!PREFIX_RE.test(prefix)) throw new Error("Prefix can use letters, numbers, dot, dash, underscore (10 max).");
-        ops.push(typeCreateOp({ name, prefix }));
+        const simple = !!fd.get("newTypeSimple");
+        const npad = Math.min(6, Math.max(0, parseInt(str(fd, "newTypePad") || "0", 10) || 0));
+        ops.push(typeCreateOp({ name, prefix, pad: npad, fields: simple ? [] : DETAIL_FIELDS.map(([k]) => k) }));
         category = name;
       }
       if (!category) throw new Error("Pick an asset type.");
       const id = norm(fd.get("id"));
+      if (!id) throw new Error("Enter an Asset ID. It's what the barcode will say.");
       if (!validId(id)) throw new Error("Asset ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
       const owner = idOwner(id);
       if (owner) throw new Error(`“${id}” is already used by ${owner}.`);
@@ -686,7 +730,7 @@ function shownStaff() {
   const q = $("#staffSearch").value.trim().toLowerCase();
   const showRemoved = $("#staffRemoved").checked;
   let rows = cache.staff.filter((s) => showRemoved || s.active);
-  if (q) rows = rows.filter((s) => `${s.id} ${s.name}`.toLowerCase().includes(q));
+  if (q) rows = rows.filter((s) => `${s.id} ${s.name} ${s.badgeId || ""}`.toLowerCase().includes(q));
   return rows;
 }
 
@@ -701,7 +745,7 @@ function renderStaff() {
         const open = cache.alerts.filter((a) => a.missedById === s.id).length;
         return `<tr class="${s.active ? "" : "dim"}" data-id="${esc(s.id)}">
           <td><input type="checkbox" data-sel ${selectedStaff.has(s.id) ? "checked" : ""} ${s.active ? "" : "disabled"} /></td>
-          <td class="mono"><b>${esc(s.id)}</b></td><td>${esc(s.name)}${open ? ` <span class="chip warn" title="Open alerts">${open} alert${open > 1 ? "s" : ""}</span>` : ""}</td>
+          <td class="mono"><b>${esc(s.id)}</b></td><td class="mono">${s.badgeId ? esc(s.badgeId) : '<span class="muted">—</span>'}</td><td>${esc(s.name)}${open ? ` <span class="chip warn" title="Open alerts">${open} alert${open > 1 ? "s" : ""}</span>` : ""}</td>
           <td>${s.active ? '<span class="chip in">Active</span>' : '<span class="chip off">Removed</span>'}</td>
           <td>${pinCell(s)}</td>
           <td>${held.length ? held.map((h) => `<span class="chip out">${esc(h)}</span>`).join(" ") : '<span class="muted">—</span>'}</td>
@@ -712,7 +756,7 @@ function renderStaff() {
             ${s.active ? '<button class="btn sm danger" data-act="remove">Remove</button>' : '<button class="btn sm" data-act="restore">Restore</button>'}
           </td></tr>`;
       }).join("")
-    : emptyRow(7, cache.staff.length ? "No staff match." : "No staff yet. Add someone or import a CSV.");
+    : emptyRow(8, cache.staff.length ? "No staff match." : "No staff yet. Add someone or import a spreadsheet.");
 
   const n = selectedStaff.size;
   $("#printStaffSelected").disabled = n === 0;
@@ -737,7 +781,7 @@ $("#staffBody").addEventListener("change", (e) => {
 $("#printStaffSelected").addEventListener("click", () => openPrint("staff", [...selectedStaff]));
 $("#addStaff").addEventListener("click", () => staffForm(null));
 $("#exportStaff").addEventListener("click", () =>
-  downloadFile("staff.csv", toCSV(["Employee ID", "Name", "Active"], cache.staff.map((s) => [s.id, s.name, s.active ? "yes" : "no"]))));
+  downloadFile("staff.csv", toCSV(["Employee ID", "Badge ID", "Name", "Active"], cache.staff.map((s) => [s.id, s.badgeId || "", s.name, s.active ? "yes" : "no"]))));
 
 $("#staffBody").addEventListener("click", async (e) => {
   const btn = e.target.closest("[data-act]");
@@ -766,81 +810,133 @@ function staffForm(existing) {
     title: editing ? `Edit ${existing.name}` : "Add staff member",
     submit: editing ? "Save changes" : "Add staff member",
     body: `<div class="form-grid">
-      <label class="f">Employee ID (matches their badge barcode)<input name="id" value="${esc(existing?.id ?? "")}" ${editing ? "disabled" : ""} required inputmode="text" /></label>
-      <label class="f">Full name<input name="name" value="${esc(existing?.name ?? "")}" required /></label></div>
-      ${editing ? "" : '<p class="muted" style="font-size:13px;margin-bottom:0">Tip: click into the Employee ID field and scan their badge to fill it in.</p>'}`,
+      <label class="f">Employee ID<input name="id" value="${esc(existing?.id ?? "")}" ${editing ? "disabled" : ""} required inputmode="text" /></label>
+      <label class="f">Badge number <span class="muted" style="text-transform:none;font-weight:400">(the longer number their badge barcode reads)</span><input name="badge" value="${esc(existing?.badgeId ?? "")}" inputmode="text" /></label>
+      <label class="f" style="grid-column:1/-1">Full name<input name="name" value="${esc(existing?.name ?? "")}" required /></label></div>
+      <p class="muted" style="font-size:13px;margin-bottom:0">Staff can scan their badge <i>or</i> type/scan their employee ID. Each check-out and check-in records which one they used. Tip: click into the Badge number field and scan their badge to fill it in.</p>`,
     onSubmit: async (fd) => {
       const name = str(fd, "name");
+      const badge = norm(fd.get("badge"));
       if (!name) throw new Error("Enter the person's name.");
+      if (badge && !validId(badge)) throw new Error("Badge number can only use letters, numbers, dot, dash and underscore (40 characters max).");
       if (editing) {
-        if (name === existing.name) throw new Error("No changes to save.");
-        await commit([{
+        const changedName = name !== existing.name, changedBadge = badge !== (existing.badgeId || "");
+        if (!changedName && !changedBadge) throw new Error("No changes to save.");
+        if (changedBadge && badge) {
+          const owner = idOwner(badge);
+          if (owner && !(cache.staff.find((x) => x.badgeId === badge)?.id === existing.id)) throw new Error(`“${badge}” is already used by ${owner}.`);
+          if (badge === existing.id) throw new Error("The badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.");
+        }
+        const ops = [];
+        if (changedName) ops.push({
           ref: F.doc(db, "staff", existing.id), mode: "update", data: { name, updatedAt: now() },
           audit: { action: "staff.update", targetType: "staff", targetId: existing.id, summary: `Renamed ${existing.name} → ${name} (${existing.id})`, before: { name: existing.name }, after: { name } },
-        }]);
+        });
+        if (changedBadge) ops.push(staffBadgeOp({ ...existing, name }, badge));
+        // Two audited updates to the same record can't share one batch (one footprint per record), so save in turn.
+        for (const op of ops) await commit([op]);
         return toast("Saved", "ok");
       }
       const id = norm(fd.get("id"));
       if (!validId(id)) throw new Error("Employee ID can only use letters, numbers, dot, dash and underscore (40 characters max).");
       const owner = idOwner(id);
       if (owner) throw new Error(`“${id}” is already used by ${owner}.`);
-      await commit([staffCreateOp({ id, name })]);
+      if (badge) {
+        if (badge === id) throw new Error("The badge number is the same as the employee ID. Leave it blank if the badge shows the employee ID.");
+        const bo = idOwner(badge);
+        if (bo) throw new Error(`Badge number “${badge}” is already used by ${bo}.`);
+      }
+      await commit([staffCreateOp({ id, name, badgeId: badge })]);
       toast(`Added ${name}`, "ok");
     },
   });
 }
 
-// ═════════════════════════ CSV import ═════════════════════════
+// ═════════════════════════ spreadsheet import ═════════════════════════
 $("#importAssets").addEventListener("click", () => importDialog("asset"));
 $("#importStaff").addEventListener("click", () => importDialog("staff"));
+$("#importAdmins").addEventListener("click", () => importAdminsDialog());
+
+const FILE_ACCEPT = ".xlsx,.xls,.csv,.tsv,.txt";
+const fileNote = "Excel (.xlsx) and CSV files both work. The first row must be column headers, and the first sheet is used.";
+
+/** Hook up the "Download template" buttons inside an import dialog. */
+function wireTemplates(kind) {
+  const go = (format) => async () => {
+    try { await downloadTemplate(kind, format); }
+    catch (err) { toast(`${err.message || err} You can use the CSV template instead.`, "err", 6000); }
+  };
+  $("#tplXlsx").onclick = go("xlsx");
+  $("#tplCsv").onclick = go("csv");
+}
 
 function importDialog(kind) {
   const isAsset = kind === "asset";
   const example = isAsset
-    ? "assetId,assetType,model,imei,serial,phoneNumber\nPH-001,Phone,iPhone 13,356938035643809,F2LXYZ123,352-555-0101\n,iPad,iPad 10th gen,,DMQ123,"
-    : "employeeId,name\n10234,Jane Doe";
+    ? "assetId,assetType,model,imei,serial,phoneNumber\nR1,Rover phone,iPhone 13,356938035643809,F2LXYZ123,352-555-0101\n,Fob,,,,"
+    : "employeeId,badgeId,name\n10234,1002340077,Jane Doe";
   const d = $("#dlg");
   d.onclose = null;
   const defaultSel = isAsset
     ? `<label class="f" style="margin-top:10px">Asset type for rows without one<select id="impDefault"><option value="">(none: rows must have an assetType)</option>${activeTypes().map((t) => `<option>${esc(t.name)}</option>`).join("")}</select></label>`
     : "";
-  d.innerHTML = `<h2>Import ${isAsset ? "assets" : "staff"} from CSV</h2>
-    <p class="muted" style="margin-top:0">First row must be column headers. IDs that already exist are skipped.${isAsset ? " Leave assetId blank to auto-number from the type's prefix. New asset types in the file are created for you." : ""} Excel: <i>Save As → CSV</i>.</p>
-    <label class="f">CSV file<input type="file" id="impFile" accept=".csv,.tsv,.txt" /></label>
+  const help = isAsset
+    ? "Columns: assetId, assetType, model, imei, serial, phoneNumber. Everything except assetType is optional. Leave assetId blank to auto-number from the type's prefix. IDs that already exist are skipped, and new asset types in the file are created for you."
+    : "Columns: employeeId, name (or firstName and lastName), and optionally badgeId. If someone already exists and the row has a badgeId, their badge number is filled in. Nothing else about them changes.";
+  d.innerHTML = `<h2>Import ${isAsset ? "assets" : "staff"} from a spreadsheet</h2>
+    <p class="muted" style="margin-top:0">${fileNote} ${help}</p>
+<div class="row" style="margin:-4px 0 12px"><span class="muted">Need a blank to fill in?</span><button class="btn sm" type="button" id="tplXlsx">Download Excel template</button><button class="btn sm" type="button" id="tplCsv">Download CSV template</button></div>
+        <label class="f">Spreadsheet file<input type="file" id="impFile" accept="${FILE_ACCEPT}" /></label>
     ${defaultSel}
     <label class="f" style="margin-top:10px">…or paste rows<textarea id="impText" placeholder="${esc(example)}"></textarea></label>
     <div id="impPreview" style="margin-top:12px"></div>
     <div class="foot"><button class="btn ghost" id="impClose">Close</button><button class="btn" id="impPrev">Preview</button><button class="btn primary" id="impGo" disabled>Import</button></div>`;
 
-  let parsed = null;
+  let parsed = null, fileRows = null;
+  const rowsNow = () => fileRows || parseCSV($("#impText").value);
   $("#impClose").onclick = () => d.close();
-  $("#impFile").onchange = async (e) => { const f = e.target.files[0]; if (f) { $("#impText").value = await f.text(); preview(); } };
-  $("#impPrev").onclick = preview;
-  if ($("#impDefault")) $("#impDefault").onchange = () => $("#impText").value && preview();
+  wireTemplates(kind);
+  $("#impFile").onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try {
+      const r = await readSpreadsheet(f);
+      fileRows = r.rows;
+      $("#impText").value = "";
+      preview(r.sheet ? `Read sheet “${r.sheet}”.` : "");
+    } catch (err) { fileRows = null; $("#impPreview").innerHTML = `<div class="notice">${esc(err.message || String(err))}</div>`; $("#impGo").disabled = true; }
+  };
+  $("#impText").oninput = () => { fileRows = null; };
+  $("#impPrev").onclick = () => preview();
+  if ($("#impDefault")) $("#impDefault").onchange = () => (fileRows || $("#impText").value) && preview();
 
-  function preview() {
-    const existing = new Set([...cache.assets, ...cache.staff].map((x) => x.id));
-    parsed = parseImport(kind, parseCSV($("#impText").value), {
+  function preview(prefix = "") {
+    const existing = new Set([...cache.assets.map((x) => x.id), ...cache.staff.map((x) => x.id), ...cache.staff.map((x) => x.badgeId).filter(Boolean)]);
+    parsed = parseImport(kind, rowsNow(), {
       existingIds: existing, pad: S.ASSET_ID_PAD,
-      knownTypes: activeTypes().map((t) => ({ name: t.name, prefix: prefixOf(t) })),
+      existingStaff: new Map(cache.staff.map((x) => [x.id, { name: x.name, badgeId: x.badgeId || "" }])),
+      knownTypes: activeTypes().map((t) => ({ name: t.name, prefix: prefixOf(t), pad: padOf(t) })),
       defaultType: $("#impDefault")?.value || "",
     });
     const box = $("#impPreview");
     if (parsed.fatal) { box.innerHTML = `<div class="notice">${esc(parsed.fatal)}</div>`; $("#impGo").disabled = true; return; }
     const errs = parsed.errors.slice(0, 15).map((x) => `<li>Row ${x.line}: ${esc(x.message)}</li>`).join("");
-    box.innerHTML = `<p style="margin:0 0 6px"><b>${parsed.records.length}</b> ready to import${parsed.errors.length ? `, <b>${parsed.errors.length}</b> skipped` : ""}.
+    const total = parsed.records.length + parsed.updates.length;
+    box.innerHTML = `<p style="margin:0 0 6px">${esc(prefix)} <b>${parsed.records.length}</b> new ${isAsset ? "asset" : "staff member"}${parsed.records.length === 1 ? "" : "s"} ready to import${parsed.updates.length ? `, <b>${parsed.updates.length}</b> existing ${parsed.updates.length === 1 ? "person" : "people"} getting a badge number` : ""}${parsed.errors.length ? `, <b>${parsed.errors.length}</b> skipped` : ""}.
       ${parsed.newTypes?.length ? `<br>New asset types that will be created: <b>${parsed.newTypes.map(esc).join(", ")}</b>.` : ""}</p>
       ${errs ? `<ul class="muted" style="margin:6px 0 0;padding-left:18px;font-size:13px">${errs}${parsed.errors.length > 15 ? `<li>…and ${parsed.errors.length - 15} more</li>` : ""}</ul>` : ""}`;
-    $("#impGo").disabled = !parsed.records.length;
-    $("#impGo").textContent = `Import ${parsed.records.length}`;
+    $("#impGo").disabled = !total;
+    $("#impGo").textContent = `Import ${total}`;
   }
 
   $("#impGo").onclick = async () => {
-    if (!parsed?.records.length) return;
+    const total = parsed ? parsed.records.length + parsed.updates.length : 0;
+    if (!total) return;
     $("#impGo").disabled = true; $("#impPrev").disabled = true;
     const batchId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
     const size = S.IMPORT_CHUNK;
     let done = 0;
+    const progress = () => ($("#impPreview").innerHTML = `<p style="margin:0">Imported ${done} of ${total}…</p>`);
     try {
       // New asset types first, so assets can reference them.
       const newTypes = parsed.newTypes || [];
@@ -851,14 +947,94 @@ function importDialog(kind) {
         const chunk = parsed.records.slice(i, i + size);
         await commit(chunk.map((r) => (isAsset ? assetCreateOp({ ...r, category: r.assetType }) : staffCreateOp(r))), batchId);
         done += chunk.length;
-        $("#impPreview").innerHTML = `<p style="margin:0">Imported ${done} of ${parsed.records.length}…</p>`;
+        progress();
       }
-      toast(`Imported ${done} ${isAsset ? "assets" : "staff"}`, "ok");
+      for (let i = 0; i < parsed.updates.length; i += size) {
+        const chunk = parsed.updates.slice(i, i + size);
+        await commit(chunk.map((u) => staffBadgeOp({ id: u.id, name: u.name, badgeId: u.previous }, u.badgeId)), batchId);
+        done += chunk.length;
+        progress();
+      }
+      toast(`Imported ${done} ${isAsset ? "assets" : "staff records"}`, "ok");
       d.close();
     } catch (err) {
-      $("#impPreview").innerHTML = `<div class="notice">Imported ${done} of ${parsed.records.length} before an error: ${esc(explain(err))}<br>Fix the problem and run the import again. Records already added are skipped automatically.</div>`;
+      $("#impPreview").innerHTML = `<div class="notice">Imported ${done} of ${total} before an error: ${esc(explain(err))}<br>Fix the problem and run the import again. Records already added are skipped automatically.</div>`;
       $("#impPrev").disabled = false;
     }
+  };
+  d.showModal();
+}
+
+/** Bulk-create admin or station logins. Each person gets a random password they never see; they set their own from the emailed reset link. */
+function importAdminsDialog() {
+  const d = $("#dlg");
+  d.onclose = null;
+  d.innerHTML = `<h2>Import admins from a spreadsheet</h2>
+    <p class="muted" style="margin-top:0">${fileNote} Columns: <b>email</b>, <b>name</b>, and optionally <b>role</b> (admin or station; blank = admin). Each person gets an email to set their own password. They can then sign in at the admin page.</p>
+<div class="row" style="margin:-4px 0 12px"><span class="muted">Need a blank to fill in?</span><button class="btn sm" type="button" id="tplXlsx">Download Excel template</button><button class="btn sm" type="button" id="tplCsv">Download CSV template</button></div>
+        <label class="f">Spreadsheet file<input type="file" id="impFile" accept="${FILE_ACCEPT}" /></label>
+    <label class="f" style="margin-top:10px">…or paste rows<textarea id="impText" placeholder="email,name,role\njordan@example.org,Jordan Lee,admin"></textarea></label>
+    <div id="impPreview" style="margin-top:12px"></div>
+    <div class="foot"><button class="btn ghost" id="impClose">Close</button><button class="btn" id="impPrev">Preview</button><button class="btn primary" id="impGo" disabled>Create logins</button></div>`;
+  let parsed = null, fileRows = null;
+  const rowsNow = () => fileRows || parseCSV($("#impText").value);
+  $("#impClose").onclick = () => d.close();
+  wireTemplates("admin");
+  $("#impFile").onchange = async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    try { fileRows = (await readSpreadsheet(f)).rows; $("#impText").value = ""; preview(); }
+    catch (err) { fileRows = null; $("#impPreview").innerHTML = `<div class="notice">${esc(err.message || String(err))}</div>`; $("#impGo").disabled = true; }
+  };
+  $("#impText").oninput = () => { fileRows = null; };
+  $("#impPrev").onclick = preview;
+
+  function preview() {
+    const existing = new Set([...cache.admins, ...cache.stations].map((x) => String(x.email || "").toLowerCase()));
+    parsed = parseAdminImport(rowsNow(), { existingEmails: existing });
+    const box = $("#impPreview");
+    if (parsed.fatal) { box.innerHTML = `<div class="notice">${esc(parsed.fatal)}</div>`; $("#impGo").disabled = true; return; }
+    const errs = parsed.errors.slice(0, 15).map((x) => `<li>Row ${x.line}: ${esc(x.message)}</li>`).join("");
+    const admins = parsed.records.filter((r) => r.role === "admin").length, stations = parsed.records.length - admins;
+    box.innerHTML = `<p style="margin:0 0 6px"><b>${admins}</b> admin${admins === 1 ? "" : "s"}${stations ? ` and <b>${stations}</b> station login${stations === 1 ? "" : "s"}` : ""} ready to create${parsed.errors.length ? `, <b>${parsed.errors.length}</b> skipped` : ""}.</p>
+      ${errs ? `<ul class="muted" style="margin:6px 0 0;padding-left:18px;font-size:13px">${errs}${parsed.errors.length > 15 ? `<li>…and ${parsed.errors.length - 15} more</li>` : ""}</ul>` : ""}`;
+    $("#impGo").disabled = !parsed.records.length;
+  }
+
+  const randomPassword = () => {
+    const bytes = crypto.getRandomValues(new Uint8Array(18));
+    return Array.from(bytes, (b) => "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"[b % 57]).join("");
+  };
+
+  $("#impGo").onclick = async () => {
+    if (!parsed?.records.length) return;
+    $("#impGo").disabled = true; $("#impPrev").disabled = true;
+    const batchId = crypto.randomUUID ? crypto.randomUUID() : String(Date.now());
+    const failed = [];
+    let done = 0;
+    for (const r of parsed.records) {
+      $("#impPreview").innerHTML = `<p style="margin:0">Creating ${done + failed.length + 1} of ${parsed.records.length}: ${esc(r.email)}…</p>`;
+      let uid;
+      const second = appMod.initializeApp(firebaseConfig, "acct-" + Date.now() + "-" + done + failed.length);
+      try {
+        const sa = A.getAuth(second);
+        uid = (await A.createUserWithEmailAndPassword(sa, r.email, randomPassword())).user.uid;
+        await A.signOut(sa);
+      } catch (err) { failed.push(`${r.email}: ${friendlyAuthError(err)}`); await appMod.deleteApp(second); continue; }
+      await appMod.deleteApp(second);
+      try {
+        await commit([{
+          ref: F.doc(db, r.role === "admin" ? "admins" : "stations", uid), mode: "set",
+          data: { email: r.email, name: r.name, active: true, createdAt: now(), createdBy: me.email, updatedAt: now() },
+          audit: { action: `${r.role}.create`, targetType: r.role, targetId: uid, summary: `Created ${r.role} login ${r.name} <${r.email}> (spreadsheet import)`, before: null, after: { email: r.email, name: r.name } },
+        }], batchId);
+      } catch (err) { failed.push(`${r.email}: login created but not activated (${explain(err)})`); continue; }
+      try { await A.sendPasswordResetEmail(auth, r.email); } catch { failed.push(`${r.email}: created, but the password email didn't send. Use “Send password reset” on the Admins tab.`); }
+      done++;
+    }
+    $("#impPreview").innerHTML = `<p style="margin:0 0 6px"><b>${done}</b> of ${parsed.records.length} created.${done ? " Each person was emailed a link to set a password." : ""}</p>
+      ${failed.length ? `<div class="notice"><ul style="margin:0;padding-left:18px">${failed.map((m) => `<li>${esc(m)}</li>`).join("")}</ul></div>` : ""}`;
+    $("#impPrev").disabled = false;
   };
   d.showModal();
 }
@@ -962,16 +1138,16 @@ function renderReport() {
 
   const missedCell = (n) => (n ? `<span class="chip warn">${n}</span>` : "0");
   const staffTable = () => `<h3 class="sec">${r.type === "asset" ? "Staff who used this asset" : "By staff"}</h3>
-    <div class="table-wrap"><table><thead><tr><th>Employee</th><th>ID</th><th>Check-outs</th><th>Returns</th><th>Not returned</th><th>Time held</th><th>Last activity</th></tr></thead><tbody>
-    ${sum.perStaff.map((s) => row([`<b>${esc(s.employeeName)}</b>`, { h: `<span class="mono">${esc(s.employeeId)}</span>` }, s.checkouts, s.returns, { h: missedCell(s.missed) }, fmtDur(s.heldMinutes), fmtDT(s.last)])).join("") || emptyRow(7, "No activity.")}</tbody></table></div>`;
+    <div class="table-wrap"><table><thead><tr><th>Employee</th><th>ID</th><th>Check-outs</th><th>Returns</th><th>Not returned</th><th>Badge scans</th><th>Typed/scanned ID</th><th>Time held</th><th>Last activity</th></tr></thead><tbody>
+    ${sum.perStaff.map((s) => row([`<b>${esc(s.employeeName)}</b>`, { h: `<span class="mono">${esc(s.employeeId)}</span>` }, s.checkouts, s.returns, { h: missedCell(s.missed) }, s.badge, s.eid, fmtDur(s.heldMinutes), fmtDT(s.last)])).join("") || emptyRow(9, "No activity.")}</tbody></table></div>`;
   const assetTable = () => `<h3 class="sec">${r.type === "staff" ? "Assets this person used" : "By asset"}</h3>
     <div class="table-wrap"><table><thead><tr><th>Asset</th><th>Type</th><th>Model</th><th>Check-outs</th><th>Returns</th><th>Not returned</th><th>Time held</th><th>Last held by</th></tr></thead><tbody>
     ${sum.perAsset.map((a) => row([{ h: `<span class="mono"><b>${esc(a.assetId)}</b></span>` }, { h: typeChip(a.assetCategory) }, esc(a.assetModel), a.checkouts, a.returns, { h: missedCell(a.missed) }, fmtDur(a.heldMinutes), `${esc(a.lastHolder)} <span class="sub">${fmtDT(a.last)}</span>`])).join("") || emptyRow(8, "No activity.")}</tbody></table></div>`;
 
   const shown = r.logs.slice(0, 500);
   const activity = `<h3 class="sec">Activity</h3>
-    <div class="table-wrap"><table><thead><tr><th>Time</th><th>Action</th><th>Asset</th><th>Type</th><th>Employee</th><th>Held</th><th>Source</th></tr></thead><tbody>
-    ${shown.map((l) => row([fmtDT(l.ts), { h: actionCell(l) }, { h: `<span class="mono">${esc(l.assetId)}</span>` }, { h: typeChip(l.assetCategory) }, `${esc(l.employeeName)} <span class="sub mono">${esc(l.employeeId)}</span>`, l.type === "in" ? fmtDur(l.heldMinutes) : "—", esc(l.source)])).join("") || emptyRow(7, "No activity in this period.")}</tbody></table></div>
+    <div class="table-wrap"><table><thead><tr><th>Time</th><th>Action</th><th>Asset</th><th>Type</th><th>Employee</th><th>ID used</th><th>Held</th><th>Source</th></tr></thead><tbody>
+    ${shown.map((l) => row([fmtDT(l.ts), { h: actionCell(l) }, { h: `<span class="mono">${esc(l.assetId)}</span>` }, { h: typeChip(l.assetCategory) }, `${esc(l.employeeName)} <span class="sub mono">${esc(l.employeeId)}</span>`, esc(idMethodLabel(l) || "—"), l.type === "in" ? fmtDur(l.heldMinutes) : "—", esc(l.source)])).join("") || emptyRow(8, "No activity in this period.")}</tbody></table></div>
     ${r.logs.length > 500 ? `<p class="muted">Showing the 500 most recent of ${r.logs.length} entries. The CSV export has them all.</p>` : ""}
     ${r.capped ? `<div class="notice" style="margin-top:10px">Only the most recent ${REPORT_MAX} entries are included. Narrow the date range for a complete picture.</div>` : ""}`;
 

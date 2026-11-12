@@ -12,6 +12,7 @@ export function normalizeLog(id, d) {
     employeeName: d.employeeName || "",
     heldMinutes: d.heldMinutes ?? null,
     source: d.source || "",
+    idMethod: d.idMethod || "",   // 'badge' | 'eid' | '' (device scanned alone)
     handledById: d.handledById || "",
     handledByName: d.handledByName || "",
     takeoverFromName: d.takeoverFromName || "",
@@ -30,7 +31,7 @@ export function summarize(logs) {
   let checkouts = 0, returns = 0, missed = 0, heldMinutes = 0;
 
   for (const l of logs) {
-    const s = staff.get(l.employeeId) || { employeeId: l.employeeId, employeeName: l.employeeName, checkouts: 0, returns: 0, missed: 0, heldMinutes: 0, last: null };
+    const s = staff.get(l.employeeId) || { employeeId: l.employeeId, employeeName: l.employeeName, checkouts: 0, returns: 0, missed: 0, heldMinutes: 0, badge: 0, eid: 0, last: null };
     const a = assets.get(l.assetId) || { assetId: l.assetId, assetModel: l.assetModel, assetCategory: l.assetCategory, checkouts: 0, returns: 0, missed: 0, heldMinutes: 0, last: null, lastHolder: "" };
 
     if (l.type === "out") { checkouts++; s.checkouts++; a.checkouts++; }
@@ -38,6 +39,9 @@ export function summarize(logs) {
       returns++; s.returns++; a.returns++;
       if (l.heldMinutes != null) { heldMinutes += l.heldMinutes; s.heldMinutes += l.heldMinutes; a.heldMinutes += l.heldMinutes; }
     } else if (l.type === "missed") { missed++; s.missed++; a.missed++; }
+
+    if (l.type !== "missed" && l.idMethod === "badge") s.badge++;
+    else if (l.type !== "missed" && l.idMethod === "eid") s.eid++;
 
     if (l.ts && (!s.last || l.ts > s.last)) { s.last = l.ts; s.employeeName = l.employeeName || s.employeeName; }
     if (l.ts && (!a.last || l.ts > a.last)) {
@@ -67,9 +71,12 @@ export const actionLabel = (l) =>
   : l.type === "in" ? "Checked in"
   : `Not returned${l.handledByName ? ` (taken by ${l.handledByName})` : ""}`;
 
-export const ACTIVITY_HEADERS = ["Date/Time", "Action", "Asset ID", "Asset Type", "Model", "Employee ID", "Employee Name", "Held (min)", "Source", "Handled By"];
+export const ID_METHOD_LABEL = { badge: "Badge", eid: "Employee ID" };
+export const idMethodLabel = (l) => ID_METHOD_LABEL[l.idMethod] || (l.type === "in" ? "Device only" : "");
+
+export const ACTIVITY_HEADERS = ["Date/Time", "Action", "Asset ID", "Asset Type", "Model", "Employee ID", "Employee Name", "ID Used", "Held (min)", "Source", "Handled By"];
 export const activityRows = (logs) =>
   logs.map((l) => [
     l.ts ? l.ts.toLocaleString() : "", actionLabel(l), l.assetId, l.assetCategory, l.assetModel,
-    l.employeeId, l.employeeName, l.heldMinutes ?? "", l.source, l.handledByName || "",
+    l.employeeId, l.employeeName, idMethodLabel(l), l.heldMinutes ?? "", l.source, l.handledByName || "",
   ]);
