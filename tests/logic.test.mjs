@@ -544,11 +544,15 @@ test("stale staff: only look up history for people old enough to be stale", () =
 });
 
 // ───────── camera scanning ─────────
-import { acceptScan } from "../docs/js/camera-scan.js";
-test("camera: the same barcode on consecutive frames counts once, a different one or a later repeat counts again", () => {
-  assert.equal(acceptScan("PH-001", null, 1000), true);
-  assert.equal(acceptScan("PH-001", { code: "PH-001", at: 1000 }, 1500), false);
-  assert.equal(acceptScan("PH-002", { code: "PH-001", at: 1000 }, 1500), true);
-  assert.equal(acceptScan("PH-001", { code: "PH-001", at: 1000 }, 4000), true);
-  assert.equal(acceptScan("  ", null, 1000), false);
+import { trackScan } from "../docs/js/camera-scan.js";
+test("camera: a barcode held in view counts once; it counts again only after it left the view", () => {
+  let r = trackScan("PH-001", null, 1000);
+  assert.equal(r.accept, true);
+  for (let t = 1120; t <= 8000; t += 120) {                      // still in front of the camera the whole time
+    r = trackScan("PH-001", r.last, t);
+    assert.equal(r.accept, false, `t=${t}`);
+  }
+  assert.equal(trackScan("PH-001", r.last, 8000 + 3000).accept, true);   // gone for 3s, then shown again
+  assert.equal(trackScan("PH-002", r.last, 8100).accept, true);          // a different code counts straight away
+  assert.equal(trackScan("  ", null, 1000).accept, false);
 });

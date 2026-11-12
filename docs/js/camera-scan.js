@@ -6,11 +6,15 @@ const ZXING = ["https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min
 const FORMATS = ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "codabar", "qr_code"];
 const SAME_CODE_GAP_MS = 2500;
 
-/** Pure: ignore the same code seen again within a couple of seconds (the camera sees it on every frame). */
-export function acceptScan(code, last, now = Date.now(), gap = SAME_CODE_GAP_MS) {
+/**
+ * Pure. The camera sees the same barcode on every frame, so a code only counts again after it has been out of view for `gap` ms.
+ * Returns { accept, last } where `last` is the new tracking state (refreshed every time the same code is still in view).
+ */
+export function trackScan(code, last, now = Date.now(), gap = SAME_CODE_GAP_MS) {
   const c = norm(code);
-  if (!c) return false;
-  return !(last && last.code === c && now - last.at < gap);
+  if (!c) return { accept: false, last };
+  if (last && last.code === c && now - last.at < gap) return { accept: false, last: { code: c, at: now } };
+  return { accept: true, last: { code: c, at: now } };
 }
 
 export const cameraSupported = () => !!(typeof navigator !== "undefined" && navigator.mediaDevices?.getUserMedia && globalThis.isSecureContext !== false);
@@ -108,8 +112,9 @@ export async function openCameraScanner({ title = "Scan a barcode", onCode, keep
           ctx.drawImage(video, 0, 0);
           const raw = await decode(canvas);
           const code = norm(raw);
-          if (code && acceptScan(code, last)) {
-            last = { code, at: Date.now() };
+          const t = trackScan(code, last);
+          if (code) last = t.last;
+          if (t.accept) {
             box.classList.add("hit"); setTimeout(() => box.classList.remove("hit"), 600);
             navigator.vibrate?.(60);
             status.textContent = `Scanned ${code}`;
