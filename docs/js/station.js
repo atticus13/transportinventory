@@ -3,7 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=14";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=15";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -18,6 +18,8 @@ const ICONS = {
 
 let mode = null;             // null = home screen, otherwise "out" | "in" | "report"
 let camHandle = null;        // the open camera scanner, if any
+let camWanted = false;       // the camera was used for this task: reopen it for the next scanning step
+let openCam = null;
 const RESULT_SECS = Math.min(S.RESULT_SECONDS ?? 3, 3);   // success cards go back to the home screen after ~3 seconds
 let pending = null;          // {id, name, source, method, rec, pin: null | {need, tries, first, verified, created}}
 let report = null;           // damage report in progress: {step: "device"|"note"|"who"|"pin", asset, note}
@@ -82,6 +84,7 @@ function idle() {
   $("#reportPanel").classList.add("hidden");
   pending = null;
   camHandle?.close?.();
+  camWanted = false;
   document.body.classList.add("home");
   if (auth.currentUser) setTimeout(refreshRecent, 600);   // give the write a moment to land, then show it
   setPinUi(false);
@@ -168,13 +171,14 @@ function focusScan() {
 // ───────── lookups ─────────
 async function lookup(code) {
   if (!validId(code)) return { kind: "unknown" };
-  // Ask for all three at once (device, employee ID, badge number) instead of one after another.
-  const [a, st, b] = await Promise.all([
-    F.getDoc(F.doc(db, "assets", code)),
-    F.getDoc(F.doc(db, "staff", code)),
-    F.getDocs(F.query(F.collection(db, "staff"), F.where("badgeId", "==", code), F.limit(1))),
-  ]);
+  // Ask for all three at once (device, employee ID, badge number). A device answer is used as soon as it arrives.
+  const aP = F.getDoc(F.doc(db, "assets", code));
+  const stP = F.getDoc(F.doc(db, "staff", code));
+  const bP = F.getDocs(F.query(F.collection(db, "staff"), F.where("badgeId", "==", code), F.limit(1)));
+  stP.catch(() => {}); bP.catch(() => {});
+  const a = await aP;
   if (a.exists()) return { kind: "asset", rec: { id: a.id, ...a.data() } };
+  const [st, b] = await Promise.all([stP, bP]);
   if (st.exists()) return { kind: "employee", method: "eid", rec: { id: st.id, ...st.data() } };
   if (!b.empty) return { kind: "employee", method: "badge", rec: { id: b.docs[0].id, ...b.docs[0].data() } };
   return { kind: "unknown" };
@@ -337,6 +341,7 @@ function startReport(asset = null) {
 }
 
 function reportWhyStep(asset) {
+  camHandle?.close?.();            // the reason buttons are underneath the camera: put it away
   report.asset = asset;
   report.step = "why";
   setPinUi(false);
@@ -353,6 +358,7 @@ function reportWhoStep() {
   $("#reportPanel").classList.add("hidden");
   reportStage("Now scan your badge", `Step 3 of 3 · or type your employee ID below · sends the report for ${report.asset.id}`, 45);
   focusScan();
+  if (camWanted) openCam?.();      // they were using the camera: bring it back for the badge
 }
 
 /** The scan field is used while a report is open. */
@@ -628,7 +634,7 @@ if (mq("(pointer: coarse)")) {
 if (cameraSupported() && mq("(pointer: coarse)")) {
   const cam = $("#camBtn");
   cam.hidden = false;
-  cam.addEventListener("click", async () => {
+  openCam = async () => {
     if (camHandle) return;
     camHandle = true;
     camHandle = await openCameraScanner({
@@ -640,9 +646,10 @@ if (cameraSupported() && mq("(pointer: coarse)")) {
         return true;
       },
       onClose: () => { camHandle = null; },
-      onManual: () => { scan.inputMode = "text"; scan.focus(); },
+      onManual: () => { camWanted = false; scan.inputMode = "text"; scan.focus(); },
     }).catch((e) => { camHandle = null; showError(e.message, { title: "Camera" }); });
-  });
+  };
+  cam.addEventListener("click", () => { camWanted = true; openCam(); });
 }
 
 // Recent activity: always open on a big screen with a mouse; on phones and tablets it sits behind its heading button.

@@ -5,7 +5,7 @@ import { norm } from "./util.js";
 const ZXING = ["https://cdn.jsdelivr.net/npm/@zxing/library@0.21.3/umd/index.min.js", "https://unpkg.com/@zxing/library@0.21.3/umd/index.min.js"];
 const FORMATS = ["code_128", "code_39", "ean_13", "ean_8", "upc_a", "upc_e", "itf", "codabar", "qr_code"];
 const SAME_CODE_GAP_MS = 2500;
-export const CAMERA_VERSION = "10";
+export const CAMERA_VERSION = "15";
 
 /**
  * Pure. The camera sees the same barcode on every frame, so a code only counts again after it has been out of view for `gap` ms.
@@ -126,6 +126,7 @@ export async function openCameraScanner({ title = "Scan a barcode", onCode, keep
   el.querySelector("[data-x]").addEventListener("click", close);
   el.querySelector("[data-m]")?.addEventListener("click", () => { close(); onManual?.(); });
 
+  (async () => {
   try {
     stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: "environment" }, width: { ideal: 1920 }, height: { ideal: 1080 }, frameRate: { ideal: 30 } }, audio: false });
     if (stopped) { stream.getTracks().forEach((t) => t.stop()); return { close }; }
@@ -176,5 +177,6 @@ export async function openCameraScanner({ title = "Scan a barcode", onCode, keep
     status.textContent = "";
     showStep({ title: denied ? "Camera permission was blocked" : "Couldn't start the camera", sub: denied ? "Allow camera access for this site in the browser settings, then try again." : (e?.message || "") });
   }
+  })();   // the camera starts in the background so the caller gets its handle (and can close it) straight away
   return { close };
 }
