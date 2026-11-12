@@ -526,3 +526,44 @@ test("templates without types or for other imports still build (admin role drop-
   const staff = new ExcelJSlib.Workbook(); await staff.xlsx.load(await buildTemplateXlsx(ExcelJSlib, "staff"));
   assert.deepEqual(staff.worksheets.map((w) => w.name), ["Import", "Instructions"]);
 });
+
+// ───────── stale staff reminder ─────────
+import { staleStaff, snoozeUntil, worthChecking, isSnoozed, lastSeenOf } from "../docs/js/stale-logic.js";
+const NOW = new Date("2026-11-12T12:00:00Z");
+const daysAgo = (n) => new Date(NOW.getTime() - n * 86400000);
+test("stale staff: no activity for 2 months is flagged, newest activity or newly added is not", () => {
+  const staff = [
+    { id: "1", name: "Old and idle", active: true, createdAt: daysAgo(200) },
+    { id: "2", name: "Active lately", active: true, createdAt: daysAgo(200) },
+    { id: "3", name: "Added last week", active: true, createdAt: daysAgo(7) },
+    { id: "4", name: "Removed", active: false, createdAt: daysAgo(300) },
+    { id: "5", name: "Idle but added 70 days ago", active: true, createdAt: daysAgo(70) },
+  ];
+  const last = new Map([["1", daysAgo(90)], ["2", daysAgo(10)]]);
+  const r = staleStaff(staff, last, NOW);
+  assert.deepEqual(r.map((x) => x.staff.id), ["1", "5"]);          // longest idle first
+  assert.equal(r[0].never, false);
+  assert.equal(r[1].never, true);                                   // never checked anything out
+  assert.equal(staleStaff([{ id: "6", active: true }], new Map(), NOW).length, 1);   // nothing known at all → flagged
+  assert.equal(staleStaff([{ id: "7", active: true, createdAt: daysAgo(61) }], new Map(), NOW).length, 1);
+  assert.equal(staleStaff([{ id: "8", active: true, createdAt: daysAgo(59) }], new Map(), NOW).length, 0);
+});
+test("stale staff: a snooze hides them for 2 months, then they come back if still idle; Timestamp-like values work", () => {
+  const s = { id: "1", name: "On leave", active: true, createdAt: daysAgo(300) };
+  const snoozedTo = snoozeUntil(NOW);
+  assert.equal(Math.round((snoozedTo - NOW) / 86400000), 60);
+  const withSnooze = { ...s, staleSnoozeUntil: { toDate: () => snoozedTo } };
+  assert.ok(isSnoozed(withSnooze, NOW));
+  assert.equal(staleStaff([withSnooze], new Map([["1", daysAgo(120)]]), NOW).length, 0);
+  const later = new Date(NOW.getTime() + 61 * 86400000);            // snooze over, still no check-out
+  assert.equal(staleStaff([withSnooze], new Map([["1", daysAgo(120)]]), later).length, 1);
+  // …but if they checked something out after the snooze, they're fine
+  assert.equal(staleStaff([withSnooze], new Map([["1", new Date(NOW.getTime() + 30 * 86400000)]]), later).length, 0);
+});
+test("stale staff: only look up history for people old enough to be stale", () => {
+  assert.equal(worthChecking({ active: true, createdAt: daysAgo(5) }, NOW), false);
+  assert.equal(worthChecking({ active: true, createdAt: daysAgo(100) }, NOW), true);
+  assert.equal(worthChecking({ active: true }, NOW), true);
+  assert.equal(worthChecking({ active: false, createdAt: daysAgo(100) }, NOW), false);
+  assert.equal(lastSeenOf({ createdAt: daysAgo(100) }, daysAgo(20)).getTime(), daysAgo(20).getTime());
+});

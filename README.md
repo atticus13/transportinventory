@@ -163,3 +163,10 @@ docs/                 the website (GitHub Pages serves this folder)
 firestore.rules, firestore.indexes.json   paste/create in the Firebase console
 tests/
 ```
+
+
+## Inactive staff reminder
+The Alerts tab has an **Inactive staff** list: active staff with no log activity for 2 months (people added less than 2 months ago aren't flagged). **Snooze 2 months** hides someone until the snooze ends (they come back if still inactive); **Remove…** deactivates them. Snoozes are written to the changelog (`staff.snooze`). Admins can't snooze/remove their own linked staff record. "Activity" is any log entry for that person. The last-activity lookup runs once per admin page load.
+
+## Scan station layout
+Phones/tablets (touch): larger buttons, numeric keyboard on the scan field with an ABC/123 toggle, recent activity behind a button. Large mouse-driven screens: recent activity always shown at the bottom. On phones the scan box is full width and the clock/Kiosk button are hidden.

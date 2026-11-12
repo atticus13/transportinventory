@@ -9,6 +9,7 @@ import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
 import { parseShiftTimes, recentShiftChanges, carriedOver } from "./shift-logic.js";
 import { classifyScan, summarizeCount } from "./inventory-logic.js";
+import { staleStaff, worthChecking, snoozeUntil, STALE_DAYS, SNOOZE_DAYS } from "./stale-logic.js";
 
 const REPORT_MAX = 5000;
 const RESOLUTIONS = [
@@ -24,7 +25,7 @@ const hoursSince = (ts) => { const d = toDate(ts); return d ? (Date.now() - d.ge
 const now = () => F.serverTimestamp();
 
 let me = null; // {uid, email, name}
-const cache = { assets: [], staff: [], admins: [], stations: [], types: [], alerts: [], issues: [], settings: [], counts: [] };
+const cache = { assets: [], staff: [], admins: [], stations: [], types: [], alerts: [], issues: [], stale: [], settings: [], counts: [] };
 let inv = null; // running inventory count: {scope, scanned:Set, unknown:[], startedAt}
 let settingsDirty = false;
 let unsubs = [];
@@ -104,6 +105,7 @@ function startListeners() {
       F.collection(db, name),
       (snap) => {
         cache[key] = snap.docs.map((d) => ({ id: d.id, ...d.data() })).sort(sort);
+        if (key === "staff") scheduleStale();
         renderCurrent();
       },
       (err) => { console.error(name, err); toast(`Couldn't load ${name}: ${err.code || err.message}`, "err", 7000); }
@@ -234,7 +236,29 @@ document.addEventListener("keydown", (e) => { if (e.key === "Escape") closeMenus
 $("#bell").addEventListener("click", () => showTab("alerts"));
 $("#alertBarGo").addEventListener("click", () => showTab("alerts"));
 
-const attention = () => cache.alerts.length + cache.issues.length;
+const attention = () => cache.alerts.length + cache.issues.length + cache.stale.length;
+
+// ── Inactive staff reminder ──
+// Last log entry per person is looked up once per page load (only for people added more than 60 days ago who aren't snoozed).
+const lastLogMemo = new Map();
+let staleTimer = null, staleRun = 0;
+const scheduleStale = () => { clearTimeout(staleTimer); staleTimer = setTimeout(refreshStale, 400); };
+async function refreshStale() {
+  const run = ++staleRun, nowD = new Date();
+  const need = cache.staff.filter((s) => worthChecking(s, nowD, STALE_DAYS) && !lastLogMemo.has(s.id) && !(toDate(s.staleSnoozeUntil)?.getTime() > nowD.getTime()));
+  for (let i = 0; i < need.length; i += 5) {
+    await Promise.all(need.slice(i, i + 5).map(async (s) => {
+      try {
+        const snap = await F.getDocs(F.query(F.collection(db, "logs"), F.where("employeeId", "==", s.id), F.orderBy("ts", "desc"), F.limit(1)));
+        lastLogMemo.set(s.id, snap.empty ? null : toDate(snap.docs[0].data().ts));
+      } catch (e) { console.error("stale lookup", s.id, e); }
+    }));
+    if (run !== staleRun) return;
+  }
+  cache.stale = staleStaff(cache.staff.filter((s) => lastLogMemo.has(s.id)), lastLogMemo, new Date(), STALE_DAYS);
+  updateBell();
+  if (currentTab === "alerts" || currentTab === "dashboard") renderCurrent();
+}
 
 function updateBell() {
   const n = attention(), m = cache.alerts.length, k = cache.issues.length;
@@ -244,6 +268,8 @@ function updateBell() {
   $("#alertTabCount").textContent = n;
   $("#alertTabCount").classList.toggle("hidden", n === 0);
   const parts = [];
+  const st = cache.stale.length;
+  if (st) parts.push(`${st} staff member${st === 1 ? " hasn't" : "s haven't"} checked anything out in ${Math.round(STALE_DAYS / 30)} months`);
   if (m) parts.push(`${m} device${m === 1 ? " was" : "s were"} checked out and never checked back in`);
   if (k) parts.push(`${k} problem${k === 1 ? " was" : "s were"} reported`);
   $("#alertBarText").textContent = parts.length ? parts.join(", and ") + ". It's on you to follow up." : "";
@@ -332,6 +358,13 @@ function renderAlerts() {
       }).join("")
     : emptyRow(6, "No open alerts. Every device is accounted for.");
 
+  $("#staleBody").innerHTML = cache.stale.length
+    ? cache.stale.map(({ staff: p, last }) => `<tr data-id="${esc(p.id)}">
+        <td><b>${esc(p.name)}</b> <span class="sub mono">${esc(p.id)}</span></td>
+        <td>${last ? `${fmtDT(last)}<div class="sub">${Math.floor(hoursSince(last) / 24)} days ago</div>` : '<span class="muted">No activity recorded</span>'}</td>
+        <td class="actions">${isMyStaff(p.id) ? '<span class="sub">Your own record. Ask another admin.</span>' : '<button class="btn sm" data-act="snooze">Snooze 2 months</button> <button class="btn sm danger" data-act="stale-remove">Remove…</button>'}</td></tr>`).join("")
+    : emptyRow(3, "Nobody is inactive.");
+
   const late = cache.assets.filter((a) => a.active && a.status === "out" && hoursSince(a.checkedOutAt) > S.OVERDUE_HOURS)
     .sort((a, b) => hoursSince(b.checkedOutAt) - hoursSince(a.checkedOutAt));
   $("#overdueNote").textContent = `Devices out more than ${S.OVERDUE_HOURS} hours`;
@@ -349,6 +382,8 @@ $("#tab-alerts").addEventListener("click", async (e) => {
     if (btn.dataset.act === "resolve") resolveDialog(cache.alerts.find((x) => x.id === id));
     if (btn.dataset.act === "issue") issueDialog(cache.issues.find((x) => x.id === id));
     if (btn.dataset.act === "return") await forceReturn(cache.assets.find((x) => x.id === id));
+    if (btn.dataset.act === "snooze") await snoozeStaff(cache.staff.find((x) => x.id === id));
+    if (btn.dataset.act === "stale-remove") await removeStaff(cache.staff.find((x) => x.id === id));
   } catch (err) { toast(explain(err), "err", 6000); }
 });
 
@@ -904,17 +939,36 @@ $("#staffBody").addEventListener("click", async (e) => {
     if (btn.dataset.act === "edit") staffForm(s);
     if (btn.dataset.act === "pin") pinDialog(s);
     if (btn.dataset.act === "restore") await setActive("staff", s, true);
-    if (btn.dataset.act === "remove") {
-      const held = cache.assets.filter((a) => a.active && a.status === "out" && a.currentHolderId === s.id);
-      if (held.length) return toast(`${s.name} still has ${held.map((h) => h.id).join(", ")}. Return it first.`, "err", 5000);
-      const ok = await confirmDlg({
-        title: `Remove ${s.name}?`, danger: true, confirm: "Remove staff member",
-        message: `${esc(s.name)} (${esc(s.id)}) will no longer be able to check out devices. Past activity stays in reports, and you can restore them later.`,
-      });
-      if (ok) { await setActive("staff", s, false); selectedStaff.delete(s.id); }
-    }
+    if (btn.dataset.act === "remove") await removeStaff(s);
   } catch (err) { toast(explain(err), "err", 6000); }
 });
+
+async function removeStaff(s) {
+  if (!s) return;
+  if (isMyStaff(s.id)) return toast(SELF_MSG, "err", 6000);
+  const held = cache.assets.filter((a) => a.active && a.status === "out" && a.currentHolderId === s.id);
+  if (held.length) return toast(`${s.name} still has ${held.map((h) => h.id).join(", ")}. Return it first.`, "err", 5000);
+  const ok = await confirmDlg({
+    title: `Remove ${s.name}?`, danger: true, confirm: "Remove staff member",
+    message: `${esc(s.name)} (${esc(s.id)}) will no longer be able to check out devices. Past activity stays in reports, and you can restore them later.`,
+  });
+  if (ok) { await setActive("staff", s, false); selectedStaff.delete(s.id); dropStale(s.id); }
+}
+
+function dropStale(id) { cache.stale = cache.stale.filter((x) => x.staff.id !== id); updateBell(); renderCurrent(); }
+
+async function snoozeStaff(s) {
+  if (!s) return;
+  if (isMyStaff(s.id)) return toast(SELF_MSG, "err", 6000);
+  const until = snoozeUntil(new Date(), SNOOZE_DAYS);
+  await commit([{
+    ref: F.doc(db, "staff", s.id), mode: "update",
+    data: { staleSnoozeUntil: until, updatedAt: now() },
+    audit: { action: "staff.snooze", targetType: "staff", targetId: s.id, summary: `Snoozed the inactivity reminder for ${s.name} (${s.id}) until ${fmtDT(until)}`, before: { staleSnoozeUntil: s.staleSnoozeUntil ? toDate(s.staleSnoozeUntil).toISOString() : null }, after: { staleSnoozeUntil: until.toISOString() } },
+  }]);
+  dropStale(s.id);
+  toast(`Snoozed ${s.name} for 2 months`, "ok");
+}
 
 function staffForm(existing) {
   const editing = !!existing;

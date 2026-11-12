@@ -2,7 +2,7 @@ import { auth, db, A, F, configured, friendlyAuthError } from "./fb.js";
 import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
-import { $, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
+import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -556,7 +556,44 @@ $("#manualForm").addEventListener("submit", (e) => {
   $("#manual").open = false;
 });
 
-$("#manual").addEventListener("toggle", () => { if ($("#manual").open) $("#mEmp").focus(); else focusScan(); });
+$("#manual").addEventListener("toggle", () => {
+  const open = $("#manual").open;
+  $("#manualBtn").setAttribute("aria-expanded", String(open));
+  if (open) { $("#mEmp").focus(); $("#manual").scrollIntoView?.({ block: "nearest", behavior: "smooth" }); } else focusScan();
+});
+$("#manualBtn").addEventListener("click", () => { $("#manual").open = !$("#manual").open; });
+$("#manualClose").addEventListener("click", () => { $("#manual").open = false; });
+
+// Touch screens: tapping the scan field brings up a NUMBER keyboard (it stays hidden otherwise so a scanner never pops it up);
+// the ABC / 123 buttons switch to letters for IDs like PH-001.
+const mq = (q) => window.matchMedia?.(q)?.matches ?? false;
+if (mq("(pointer: coarse)")) {
+  let kb = "numeric";
+  scan.placeholder = "Scan, or tap here to type an ID";
+  scan.addEventListener("pointerdown", () => { scan.inputMode = kb; });
+  scan.addEventListener("blur", () => { scan.inputMode = "none"; });
+  $("#kbToggle").addEventListener("click", () => {
+    kb = kb === "numeric" ? "text" : "numeric";
+    $("#kbToggle").textContent = kb === "numeric" ? "ABC" : "123";
+    scan.inputMode = kb;
+    scan.focus();
+  });
+}
+for (const b of $$("[data-kbswap]")) {
+  b.addEventListener("click", () => {
+    const input = $("#" + b.dataset.kbswap);
+    const toText = input.inputMode !== "text";
+    input.inputMode = toText ? "text" : "numeric";
+    b.textContent = toText ? "123" : "ABC";
+    input.focus();
+  });
+}
+
+// Recent activity: always open on a big screen with a mouse; on phones and tablets it sits behind its heading button.
+const bigScreen = window.matchMedia?.("(min-width: 900px) and (pointer: fine)");
+const syncRecent = () => { if (bigScreen?.matches) $("#recentBox").open = true; };
+syncRecent();
+bigScreen?.addEventListener?.("change", syncRecent);
 
 // keep the scanner field focused so a scan always lands somewhere
 setInterval(() => {
