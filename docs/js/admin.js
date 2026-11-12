@@ -8,7 +8,7 @@ import { loadAdmin, commitAudited } from "./audit.js";
 import { RETIRE_REASONS, reasonLabel } from "./scan-logic.js";
 import { normSettings } from "./pin-logic.js";
 import { classifyScan, summarizeCount } from "./inventory-logic.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=12";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=13";
 import { staleStaff, worthChecking, snoozeUntil, STALE_DAYS, SNOOZE_DAYS } from "./stale-logic.js";
 
 const REPORT_MAX = 5000;

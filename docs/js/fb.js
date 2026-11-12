@@ -6,6 +6,8 @@ import { firebaseConfig } from "./firebase-config.js";
 export const configured = !String(firebaseConfig.apiKey).startsWith("YOUR_");
 export const app = appMod.initializeApp(firebaseConfig);
 export const auth = A.getAuth(app);
+// Stay signed in on this device (a phone or a kiosk only signs in once).
+A.setPersistence?.(auth, A.browserLocalPersistence).catch?.(() => {});
 export const db = F.getFirestore(app);
 export { A, F, appMod, firebaseConfig };
 

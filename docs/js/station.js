@@ -3,7 +3,7 @@ import { SETTINGS } from "./firebase-config.js";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep } from "./util.js";
-import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=12";
+import { openCameraScanner, cameraSupported } from "./camera-scan.js?v=13";
 
 const S = SETTINGS;
 const PIN_SECONDS = S.PIN_SECONDS ?? 30;
@@ -531,16 +531,26 @@ async function operatorRole(user) {
   return null;
 }
 
+let bootHandler = null;
+const retryBoot = () => { const u = auth.currentUser; if (u) bootHandler?.(u); };
+
 function boot() {
   $("#brandOrg").textContent = S.ORG_NAME;
   document.title = `${S.APP_NAME} · ${S.ORG_NAME}`;
   if (!configured) return show("setup");
 
-  A.onAuthStateChanged(auth, async (user) => {
+  bootHandler = async (user) => {
     unsubRecent?.(); unsubSettings?.(); clearInterval(clockTimer);
     if (!user) { show("login"); return; }
-    let role = null;
-    try { role = await operatorRole(user); } catch (e) { console.error(e); }
+    let role = null, lookupFailed = false;
+    try { role = await operatorRole(user); } catch (e) { console.error(e); lookupFailed = true; }
+    if (!role && lookupFailed) {
+      // A network hiccup must not sign the station out: stay signed in and try again shortly.
+      show("login");
+      $("#lErr").textContent = "Can't reach the server right now. Trying again…";
+      setTimeout(() => { if (auth.currentUser) A.onAuthStateChanged && retryBoot(); }, 5000);
+      return;
+    }
     if (!role) {
       await A.signOut(auth);
       $("#lErr").textContent = "That login isn't authorised for this station. Ask an admin to set it up.";
@@ -555,7 +565,8 @@ function boot() {
     initKiosk();
     const tick = () => ($("#clock").textContent = new Date().toLocaleString([], { weekday: "short", month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }));
     tick(); clockTimer = setInterval(tick, 15000);
-  });
+  };
+  A.onAuthStateChanged(auth, bootHandler);
 }
 
 $("#loginForm").addEventListener("submit", async (e) => {
@@ -564,7 +575,7 @@ $("#loginForm").addEventListener("submit", async (e) => {
   try { await A.signInWithEmailAndPassword(auth, $("#lEmail").value.trim(), $("#lPass").value); }
   catch (err) { $("#lErr").textContent = friendlyAuthError(err); }
 });
-$("#signOut").addEventListener("click", () => A.signOut(auth));
+$("#signOut").addEventListener("click", () => { if (window.confirm("Sign this station out? Someone will need the station email and password to sign it in again.")) A.signOut(auth); });
 
 // ───────── input wiring ─────────
 const scan = $("#scan");
