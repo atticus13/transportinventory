@@ -584,7 +584,7 @@ if (cameraSupported() && mq("(pointer: coarse)")) {
     open = true;
     open = await openCameraScanner({
       title: "Scan with the camera",
-      mirror: () => ({ title: $("#stName").textContent ? `${$("#stTitle").textContent}: ${$("#stName").textContent}` : $("#stTitle").textContent, sub: $("#stSub").textContent }),
+      mirror: () => ({ title: $("#stTitle").textContent, name: $("#stName").textContent, sub: $("#stSub").textContent }),
       onCode: async (code) => {
         scan.value = code; submitScan();
         await new Promise((r) => setTimeout(r, 300));

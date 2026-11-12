@@ -1776,7 +1776,7 @@ if (cameraSupported() && window.matchMedia?.("(pointer: coarse)")?.matches) {
     if (!inv) return;
     openCameraScanner({
       title: "Scan devices to count",
-      mirror: () => ({ title: "", sub: $("#invMsg").textContent }),
+      mirror: () => ({ title: "Scan each device", sub: $("#invMsg").textContent }),
       onCode: (code) => { $("#invScan").value = code; $("#invScan").dispatchEvent(new window.KeyboardEvent("keydown", { key: "Enter", cancelable: true, bubbles: true })); return true; },
     }).catch((e) => toast(e.message, "err", 6000));
   });
