@@ -370,13 +370,13 @@ function renderDashboard() {
     ? sorted.map((a) => {
         const h = hoursSince(a.checkedOutAt);
         return row([
-          { h: `<span class="mono"><b>${esc(a.id)}</b></span>` }, { h: typeChip(a.category) }, esc(a.model || "—"),
+          { h: `<span class="mono"><b>${esc(a.id)}</b></span>` }, { h: typeChip(a.category) },
           { h: a.phoneNumber ? `<a class="mono" href="tel:${esc(String(a.phoneNumber).replace(/[^\d+]/g, ""))}">${esc(a.phoneNumber)}</a>` : "—" },
           `<b>${esc(a.currentHolderName)}</b> <span class="sub mono">${esc(a.currentHolderId)}</span>`,
           fmtDT(a.checkedOutAt), { h: `${fmtDur(h * 60)}${h > S.OVERDUE_HOURS ? ' <span class="chip warn">overdue</span>' : ""}` },
         ]);
       }).join("")
-    : emptyRow(7, q ? "No checked-out device matches that search." : "Nothing is checked out.");
+    : emptyRow(6, q ? "No checked-out device matches that search." : "Nothing is checked out.");
 
   clearTimeout(recentTimer);
   recentTimer = setTimeout(loadRecent, 250);
