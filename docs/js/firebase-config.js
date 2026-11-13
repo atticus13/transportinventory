@@ -26,7 +26,7 @@ export const SETTINGS = {
   // How long the green/red result stays on screen before resetting.
   RESULT_SECONDS: 4,
   // Devices out longer than this are flagged on the admin dashboard.
-  OVERDUE_HOURS: 16,
+  OVERDUE_HOURS: 12.5,
 
   // Digits in generated asset IDs (PH-001). The prefix comes from each asset type
   // (Phone → PH-, iPad → IP-) and can be changed in the Asset types dialog.
