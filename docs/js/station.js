@@ -1,5 +1,5 @@
 import { auth, db, A, F, configured, friendlyAuthError } from "./fb.js";
-import { SETTINGS } from "./firebase-config.js";
+import { SETTINGS } from "./firebase-config.js?v=22";
 import { decide, heldMinutes } from "./scan-logic.js";
 import { normSettings, pinNeed, validPin, hashPin, newSalt, checkPin } from "./pin-logic.js";
 import { $, $$, esc, norm, validId, fmtTime, fmtDur, beep, eidFromBadge } from "./util.js";

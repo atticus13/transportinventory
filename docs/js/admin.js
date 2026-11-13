@@ -1,5 +1,5 @@
 import { auth, db, A, F, appMod, firebaseConfig, configured, friendlyAuthError } from "./fb.js";
-import { SETTINGS as S } from "./firebase-config.js";
+import { SETTINGS as S } from "./firebase-config.js?v=22";
 import { $, $$, esc, norm, validId, toDate, fmtDT, fmtFull, fmtDur, ymd, rangeFromInputs, toCSV, downloadFile, parseCSV, toast, slugify, derivePrefix, nextIdFor, beep, badgeFor } from "./util.js";
 import { normalizeLog, summarize, ACTIVITY_HEADERS, activityRows, idMethodLabel } from "./report-logic.js";
 import { parseImport, parseAdminImport, findDuplicates } from "./import-logic.js";

@@ -1,7 +1,7 @@
 import * as appMod from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import * as A from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import * as F from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js";
+import { firebaseConfig } from "./firebase-config.js?v=22";
 
 export const configured = !String(firebaseConfig.apiKey).startsWith("YOUR_");
 export const app = appMod.initializeApp(firebaseConfig);
